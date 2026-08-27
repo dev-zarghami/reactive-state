@@ -1,5 +1,7 @@
 <script lang="ts">
-    let {children} = $props();
+	import '@reactive/state/svelte';
+
+	let { children } = $props();
 </script>
 
 {@render children()}

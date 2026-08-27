@@ -24,7 +24,7 @@ pnpm test src/core/useQuery.test.ts -t "executes tasks in order"   # single file
 
 Tests are colocated in `src/core/*.test.ts` (queue strategies, relation basics, container refcounting, lifecycle delegation). Delayed disposal, LRU trimming, full relation joining, and adapter framework scopes lack direct tests.
 
-`examples/svelte/` is a separate SvelteKit app with its own **npm** lockfile — run its commands from inside that dir (`dev`/`check`/`lint`/`build`). It imports the root package via an absolute `file:/…/reactive-state/dist` path, so **build the root package first**. Never regenerate one lockfile with the other package manager. The example is unfinished and does not match the root API — not a reference implementation.
+`examples/svelte/` is a separate SvelteKit app with its own **npm** lockfile — run its commands from inside that dir (`dev`/`check`/`lint`/`build`; lint runs prettier first). It depends on the root package via an absolute `file:/…/reactive-state` path pointing at the **package root, not `dist/`** — a copied `dist/` has no manifest and only resolves by index fallback; also npm turns relative `file:` paths into broken symlinks. **Build the root package first** (types resolve into `dist/*.d.ts`). Never regenerate one lockfile with the other package manager. The example is the working reference for the root API (adapter install via `import '@reactive/state/svelte'` in `+layout.svelte`, container-managed queries via `defineQuery`, relations via `.with([...])`, RxJS streams consumed in templates directly with Svelte's `$` auto-subscription — `Subscription.unsubscribe` satisfies the store contract; call `cancel()` in `onDestroy` since container disposal is delayed) — keep it compiling when the API changes.
 
 ## Packaging gotchas
 
@@ -35,7 +35,7 @@ Tests are colocated in `src/core/*.test.ts` (queue strategies, relation basics, 
 
 ## Core architecture
 
-- `src/core/useQuery.ts` — the whole engine: `useQuery(executor, strategy)` with `'FIFO' | 'LIFO' | 'WAIT'`, per-task AbortControllers (signal passed to executor), `data$`/`error$`/`loading$` subjects, `execute/cancel/reset/dispose`. **Always dispose on teardown** — it aborts current work and completes all subjects.
+- `src/core/useQuery.ts` — the whole engine: `useQuery(executor, strategy)` with `'FIFO' | 'LIFO' | 'WAIT'`, per-task AbortControllers (signal passed to executor), `data$`/`error$`/`loading$` subjects, `execute([input][, callbacks])/cancel/reset/dispose`. **Always dispose on teardown** — it aborts current work and completes all subjects.
 - Relations also live in useQuery.ts: `setRelations()` attaches enumerable lazy getters resolved against latest emissions; join via `data$.with(keys)`; `sourceQuery` factories are cached by function identity and auto-executed once when empty; `includeDefault` folds a relation into plain `data$`.
 - `queryContainer.ts` / `defineQuery(key, factory)` — process-global keyed singleton registry with refcounting; disposal scheduled adaptively after 5/10/30 s by usage tier; best-effort LRU trim above 100 entries; `configureContainer({debug})` toggles logs.
 - `lifecycle.ts` — one process-global `LifecycleAdapter`; `onScopeDispose(cb)` returns `false` when no adapter/scope is active and retains no fallback → caller owns `dispose()`.

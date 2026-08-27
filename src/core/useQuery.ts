@@ -6,7 +6,6 @@ import {
   Subscription,
   combineLatest,
   concatMap,
-  filter,
   map,
   of,
   shareReplay,
@@ -15,15 +14,15 @@ import {
 
 type ProcessStrategy = 'FIFO' | 'LIFO' | 'WAIT';
 type EmptyInput = Record<string, never>;
-type ExecuteFn<TInput extends object> = {
-  (): void;
-  (input: TInput): void;
-};
 
 export type ExecCallbacks<TData, TError> = {
   next?: (value: TData) => void;
   error?: (err: TError | Error) => void;
   complete?: () => void;
+};
+
+type ExecuteFn<TInput extends object, TData, TError> = {
+  (input?: TInput, callbacks?: ExecCallbacks<TData, TError>): void;
 };
 
 type QueuedTask<TInput, TData, TError> = {
@@ -115,7 +114,7 @@ export type UseQueryResult<
   setRelations: <const TMap extends Record<string, unknown>>(
     relations: RelationMapOf<ParentType<TData>, TMap>
   ) => UseQueryResult<TData, TError, TMap, TInput>;
-  execute: ExecuteFn<TInput>;
+  execute: ExecuteFn<TInput, TData, TError>;
   cancel: () => void;
   reset: () => void;
   dispose: () => void;
@@ -332,6 +331,7 @@ export function useQuery<
   const loadingState = new BehaviorSubject<boolean>(false);
 
   const queue$ = new BehaviorSubject<QueuedTask<TInput, TData, TError>[]>([]);
+  const enqueue$ = new Subject<QueuedTask<TInput, TData, TError>>();
   const destroy$ = new Subject<void>();
 
   let taskIdCounter = 0;
@@ -367,12 +367,8 @@ export function useQuery<
     return task.id;
   };
 
-  queue$
-    .pipe(
-      filter((queue) => queue.length > 0),
-      concatMap((queue) => executeTask(queue[0])),
-      takeUntil(destroy$)
-    )
+  enqueue$
+    .pipe(concatMap((task) => executeTask(task)), takeUntil(destroy$))
     .subscribe((taskId) => {
       const currentQueue = queue$.getValue();
       const newQueue = currentQueue.filter((t) => t.id !== taskId);
@@ -385,14 +381,15 @@ export function useQuery<
 
   let currentAbort: (() => void) | null = null;
 
-  const run = (input?: TInput) => {
+  const run = (input?: TInput, callbacks?: ExecCallbacks<TData, TError>) => {
     const controller = new AbortController();
 
     const task: QueuedTask<TInput, TData, TError> = {
       id: ++taskIdCounter,
       executor,
       input,
-      controller
+      controller,
+      callbacks
     };
 
     currentAbort = () => {
@@ -403,6 +400,7 @@ export function useQuery<
       const currentQueue = queue$.getValue();
       currentQueue.forEach((t) => t.controller.abort());
       queue$.next([task]);
+      enqueue$.next(task);
       loadingState.next(true);
       return;
     }
@@ -412,6 +410,7 @@ export function useQuery<
     }
 
     queue$.next([...queue$.getValue(), task]);
+    enqueue$.next(task);
     loadingState.next(true);
   };
 
@@ -453,6 +452,7 @@ export function useQuery<
     destroy$.next();
     destroy$.complete();
     queue$.complete();
+    enqueue$.complete();
     dataState.complete();
     errorState.complete();
     loadingState.complete();
@@ -463,7 +463,7 @@ export function useQuery<
     error$: errorState.asObservable(),
     loading$: loadingState.asObservable(),
     setRelations,
-    execute: run as ExecuteFn<TInput>,
+    execute: run as ExecuteFn<TInput, TData, TError>,
     cancel,
     reset,
     dispose,

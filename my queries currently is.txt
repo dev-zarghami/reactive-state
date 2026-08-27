@@ -1,0 +1,36 @@
+my queries currently is
+export const useMarketsQuery = defineQuery('markets', () => {                                                            LSP                                     
+    const query = useQuery<Market[]>(async ({ signal }) => await fetchMarkets({ signal }), 'FIFO');                                                LSPs are disabled                       
+                                                                                                                                                                                           
+    return query.setRelations({                                                                                                                    ▼ Todo                                  
+      baseCurrency: {                                                                                                                              [•] Add handler(executor, strategy)     
+        sourceQuery: useCurrenciesQuery,                                                                                                               to useQuery results                 
+        foreignKey: (market: Market) => market.baseCurrencyId,                                                                                     [ ] defineQuery injects query           
+        keySelector: (currency: Currency) => currency.symbol                                                                                           instance into factory               
+      },                                                                                                                                           [ ] Core tests + full root              
+      quoteCurrency: {                                                                                                                                 verification                        
+        sourceQuery: useCurrenciesQuery,                                                                                                           [ ] Adopt new shape in example          
+        foreignKey: (market: Market) => market.quoteCurrencyId,                                                                                        queries, verify example             
+        keySelector: (currency: Currency) => currency.symbol                                                                                       [ ] Update AGENTS.md                    
+      }                                                                                                                                                                                    
+    });                                                                                                                                                                                    
+  });    
+
+but i think this usage is better
+
+export const useMarketsQuery = defineQuery('markets', (query) => {                                                                                    
+       query.handler<Market[]>(async ({signal}) => await fetchMarkets({signal}), 'FIFO')                                                                                                    
+                                                                                                                                                                                            
+       return query.setRelations({                                                                                                                                                          
+           baseCurrency: {                                                                                                                                                                  
+               sourceQuery: useCurrenciesQuery,                                                                                                                                             
+               foreignKey: (market: Market) => market.baseCurrencyId,                                                                                                                       
+               keySelector: (currency: Currency) => currency.symbol                                                                                                                         
+           },                                                                                                                                                                               
+           quoteCurrency: {                                                                                                                                                                 
+               sourceQuery: useCurrenciesQuery,                                                                                                                                             
+               foreignKey: (market: Market) => market.quoteCurrencyId,                                                                                                                      
+               keySelector: (currency: Currency) => currency.symbol                                                                                                                         
+           }                                                                                                                                                                                
+       });                                                                                                                                                                                  
+   });          

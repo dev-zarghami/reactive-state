@@ -200,6 +200,68 @@ describe('useQuery', () => {
       expect(query.data$.getValue()).toBe(3);
       query.dispose();
     });
+
+    it('does not re-execute a finished task when another execute arrives mid-flight', async () => {
+      let calls = 0;
+      const resolvers: Array<(value: number) => void> = [];
+      const emissions: Array<number | null> = [];
+
+      const query = useQuery(async () => {
+        calls++;
+        return await new Promise<number>((resolve) => resolvers.push(resolve));
+      }, 'FIFO');
+
+      query.data$.subscribe((value) => emissions.push(value));
+
+      query.execute();
+      query.execute();
+
+      await delay(5);
+      expect(calls).toBe(1);
+
+      resolvers[0](1);
+      await delay(10);
+      expect(calls).toBe(2);
+
+      resolvers[1]?.(2);
+      await delay(10);
+      expect(calls).toBe(2);
+      expect(emissions.filter((v) => v !== null).length).toBeGreaterThanOrEqual(2);
+
+      query.dispose();
+    });
+  });
+
+  describe('execute callbacks', () => {
+    it('invokes next and complete on success', async () => {
+      const next = vi.fn();
+      const errorCb = vi.fn();
+      const complete = vi.fn();
+      const query = useQuery(async () => 'ok');
+
+      query.execute(undefined, { next, error: errorCb, complete });
+      await delay(20);
+
+      expect(next).toHaveBeenCalledWith('ok');
+      expect(errorCb).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+      query.dispose();
+    });
+
+    it('invokes error on executor failure', async () => {
+      const next = vi.fn();
+      const errorCb = vi.fn();
+      const query = useQuery(async () => {
+        throw new Error('boom');
+      });
+
+      query.execute(undefined, { next, error: errorCb });
+      await delay(20);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(errorCb).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom' }));
+      query.dispose();
+    });
   });
 
   describe('LIFO strategy', () => {

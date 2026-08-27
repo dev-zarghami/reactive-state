@@ -1,41 +1,24 @@
-import {type CurrencyDto, parseCurrencyDto} from './currencies.dto';
-import {type Currency, toCurrenciesModel} from './currencies.model';
+import { type CurrencyDto, parseCurrencyDto } from './currencies.dto';
+import { type Currency, toCurrenciesModel } from './currencies.model';
+import { type FetchContext, requestJson } from '$lib/api';
 
-export async function fetchCurrencies(context?: {
-    signal?: AbortSignal,
-    params?: Record<string, string>,
-    headers?: Headers
-}) {
-    try {
-        const url = new URL('/v3/currencies')
+export async function fetchCurrencies(context: FetchContext = {}): Promise<Currency[]> {
+	const payload = await requestJson<{ status: string; data: CurrencyDto[] }>(
+		'/v3/currencies',
+		context
+	);
+	const dtos = Array.isArray(payload) ? payload : payload.data;
 
-        Object.keys(context?.params).forEach((value) => {
-            url.searchParams.set(value, context?.params[value])
-        })
+	const currencies: Currency[] = [];
 
-        const response = await fetch(url, {
-            headers: context?.headers,
-            signal: context?.signal
-        });
+	for (const dto of dtos) {
+		const parsed = parseCurrencyDto(dto);
+		if (parsed.success) {
+			currencies.push(toCurrenciesModel(parsed.output));
+		} else {
+			console.error('currency dto rejected:', parsed.issues);
+		}
+	}
 
-        if (!response.ok) throw response.statusText
-
-        const data: Array<CurrencyDto> = await response.json()
-
-        const currencies: Array<Currency> = [];
-
-        for (const item of data) {
-            const parsed = parseCurrencyDto(item);
-            if (parsed.success) {
-                currencies.push(toCurrenciesModel(parsed.output));
-            } else {
-                console.error(parsed.issues);
-            }
-        }
-
-        return currencies;
-    } catch (e) {
-        console.error(e);
-        return e
-    }
+	return currencies;
 }
