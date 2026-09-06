@@ -32,7 +32,6 @@
 		"vite": "^8.0.16"
 	},
 	"dependencies": {
-		"@reactive/state": "file:/home/artin/Projects/packages/reactive-state",
 		"valibot": "^1.2.0"
 	}
 }

@@ -2,8 +2,8 @@ import {
   BehaviorSubject,
   Subject,
   Observable,
-  PartialObserver,
-  Subscription,
+  type PartialObserver,
+  type Subscription,
   combineLatest,
   concatMap,
   map,
@@ -12,9 +12,36 @@ import {
   takeUntil
 } from 'rxjs';
 
-type ProcessStrategy = 'FIFO' | 'LIFO' | 'WAIT';
+/**
+ * Task execution strategy for the query queue.
+ *
+ * - `'FIFO'` — tasks execute in submission order (default).
+ * - `'LIFO'` — new tasks abort all pending work and run immediately.
+ * - `'WAIT'` — new tasks are ignored while one is already running.
+ *
+ * @example
+ * ```ts
+ * const query = useQuery(fetchData, 'LIFO');
+ * ```
+ */
+export type ProcessStrategy = 'FIFO' | 'LIFO' | 'WAIT';
 type EmptyInput = Record<string, never>;
 
+/**
+ * Optional callbacks invoked when a query task completes, errors, or is aborted.
+ *
+ * @typeParam TData - The query's data type.
+ * @typeParam TError - The query's custom error type.
+ *
+ * @example
+ * ```ts
+ * query.execute(undefined, {
+ *   next: (data) => console.log('got data', data),
+ *   error: (err) => console.error('query failed', err),
+ *   complete: () => console.log('done'),
+ * });
+ * ```
+ */
 export type ExecCallbacks<TData, TError> = {
   next?: (value: TData) => void;
   error?: (err: TError | Error) => void;
@@ -50,11 +77,45 @@ type RelationQueryResult = {
 };
 type RelationSourceQuery = () => RelationQueryResult | undefined;
 
+/**
+ * Maps a parent item to a related item via foreign/key selectors.
+ *
+ * @typeParam TParent - The parent item type (e.g. a `Market`).
+ * @typeParam TRelated - The related item type (e.g. a `Currency`).
+ *
+ * @example
+ * ```ts
+ * const config: RelationConfig<Market, Currency> = {
+ *   foreignKey: (market) => market.baseCurrencyId,
+ *   keySelector: (currency) => currency.id,
+ * };
+ * ```
+ */
 export type RelationConfig<TParent, TRelated> = {
   foreignKey: (parent: TParent) => string | number | undefined;
   keySelector: (related: TRelated) => string | number;
 };
 
+/**
+ * Extended relation config that can resolve data from a `source` stream, a
+ * `sourceQuery` factory, or both.
+ *
+ * When `sourceQuery` is provided and its data stream is empty, the query is
+ * auto-executed once. Set `includeDefault: true` to fold the relation into the
+ * default `data$` stream (no `.with()` needed).
+ *
+ * @typeParam TParent - The parent item type.
+ * @typeParam TRelated - The related item type.
+ *
+ * @example
+ * ```ts
+ * const config: RelationSourceConfig<Market, Currency> = {
+ *   sourceQuery: useCurrenciesQuery,
+ *   foreignKey: (market) => market.baseCurrencyId,
+ *   keySelector: (currency) => currency.id,
+ * };
+ * ```
+ */
 export type RelationSourceConfig<TParent, TRelated> = RelationConfig<TParent, TRelated> & {
   source?: ReadableStream<DataArray<TRelated> | null>;
   includeDefault?: boolean;
@@ -64,6 +125,18 @@ export type RelationSourceConfig<TParent, TRelated> = RelationConfig<TParent, TR
   };
 };
 
+/**
+ * A map of relation names to their source configs, keyed by the relation alias.
+ *
+ * @typeParam TParent - The parent item type.
+ *
+ * @example
+ * ```ts
+ * const relations: RelationMap<Market> = {
+ *   baseCurrency: { sourceQuery: useCurrenciesQuery, foreignKey: ..., keySelector: ... },
+ * };
+ * ```
+ */
 export type RelationMap<TParent> = Record<string, RelationSourceConfig<TParent, unknown>>;
 
 type RelationMapOf<TParent, TMap extends Record<string, unknown>> = {
@@ -85,6 +158,25 @@ export type RelationController<TData, TMap extends Record<string, unknown>> = {
   with: (keys: readonly RelationKey<TMap>[]) => Observable<WithRelations<TData, TMap> | null>;
 };
 
+/**
+ * Reactive data stream for a query. Wraps an RxJS `Observable` with convenience
+ * accessors and relation joining via `.with()`.
+ *
+ * @typeParam TData - The query's data type.
+ * @typeParam TRelations - Map of relation names to their related types.
+ *
+ * @example
+ * ```ts
+ * // Subscribe to raw data
+ * query.data$.subscribe((data) => console.log(data));
+ *
+ * // Get current value synchronously
+ * const current = query.data$.getValue();
+ *
+ * // Join with related data
+ * const enriched$ = query.data$.with(['baseCurrency', 'quoteCurrency']);
+ * ```
+ */
 export type QueryDataStream<
   TData,
   TRelations extends Record<string, unknown> = Record<never, never>
@@ -102,24 +194,113 @@ export type QueryDataStream<
   readonly value: TData | null;
 };
 
+/**
+ * The result of {@link useQuery} or {@link defineQuery}. Provides reactive
+ * `data$`, `error$`, `loading$` streams, execution control, relation joining,
+ * and lifecycle management.
+ *
+ * @typeParam TData - The query's data type.
+ * @typeParam TError - The query's custom error type.
+ * @typeParam TRelations - Map of relation names to their related types.
+ * @typeParam TInput - The input type passed to `execute()`.
+ *
+ * @example
+ * ```ts
+ * const query = useQuery<Market[], Error>(fetchMarkets, 'FIFO');
+ *
+ * // Execute
+ * query.execute();
+ *
+ * // Subscribe to data
+ * query.data$.subscribe((markets) => console.log(markets));
+ *
+ * // Join with relations
+ * const enriched$ = query.data$.with(['baseCurrency']);
+ *
+ * // Cancel running task
+ * query.cancel();
+ *
+ * // Dispose all subjects
+ * query.dispose();
+ * ```
+ */
 export type UseQueryResult<
   TData,
   TError,
   TRelations extends Record<string, unknown> = Record<never, never>,
   TInput extends object = EmptyInput
 > = {
+  /** Reactive data stream. Use `.subscribe()` for updates or `.with(keys)` to join relations. */
   data$: QueryDataStream<TData, TRelations>;
+  /** Reactive error stream. Emits `null` when there is no error. */
   error$: Observable<TError | Error | null>;
+  /** Reactive loading indicator. `true` while a task is executing. */
   loading$: Observable<boolean>;
+  /**
+   * Attach relation configs to this query. Returns a new `UseQueryResult` with
+   * the relation types merged into `data$`.
+   *
+   * @example
+   * ```ts
+   * const q = useQuery<Market[]>(fetchMarkets);
+   * q.setRelations({
+   *   baseCurrency: {
+   *     sourceQuery: useCurrenciesQuery,
+   *     foreignKey: (m) => m.baseCurrencyId,
+   *     keySelector: (c) => c.id,
+   *   },
+   * });
+   * ```
+   */
   setRelations: <const TMap extends Record<string, unknown>>(
     relations: RelationMapOf<ParentType<TData>, TMap>
   ) => UseQueryResult<TData, TError, TMap, TInput>;
+  /**
+   * Set or replace the executor function and optionally the strategy.
+   * Returns the same query instance for chaining.
+   *
+   * @example
+   * ```ts
+   * query.handler(async ({ signal }) => {
+   *   const res = await fetch('/api/markets', { signal });
+   *   return res.json();
+   * }, 'FIFO');
+   * ```
+   */
+  handler: (
+    exec: (ctx: TInput & { signal: AbortSignal }) => Promise<TData | null>,
+    strat?: ProcessStrategy
+  ) => UseQueryResult<TData, TError, TRelations, TInput>;
+  /**
+   * Enqueue a task for execution. Optionally pass input and callbacks.
+   *
+   * @example
+   * ```ts
+   * // No input
+   * query.execute();
+   *
+   * // With input
+   * query.execute({ id: '123' });
+   *
+   * // With callbacks
+   * query.execute(undefined, {
+   *   next: (data) => console.log(data),
+   *   error: (err) => console.error(err),
+   * });
+   * ```
+   */
   execute: ExecuteFn<TInput, TData, TError>;
+  /** Abort the currently executing task's signal. */
   cancel: () => void;
+  /** Reset `data$`, `error$`, and `loading$` to their initial states. */
   reset: () => void;
+  /** Complete all internal subjects and abort any running task. The query cannot be reused after disposal. */
   dispose: () => void;
+  /** Directly push a value into `data$`. */
   setData: (data: TData) => void;
+  /** Directly push a value into `loading$`. */
   setLoading: (status: boolean) => void;
+  /** Directly push a value into `error$`. */
   setError: (error: Error | TError | null) => void;
 };
 
@@ -252,6 +433,13 @@ function createRelationController<TData, TMap extends Record<string, unknown>>(
   };
 }
 
+/**
+ * A `BehaviorSubject` that supports relation joining via `.with()`.
+ * Used internally by {@link useQuery} and exposed for advanced use cases.
+ *
+ * @typeParam TData - The data type.
+ * @typeParam TRelations - Map of relation names to their related types.
+ */
 export class DataSubject<
   TData,
   TRelations extends Record<string, unknown> = Record<never, never>
@@ -318,6 +506,57 @@ function createDataStream<TData, TRelations extends Record<string, unknown> = Re
   };
 }
 
+/**
+ * Create a reactive query with an execution queue, abort control, and
+ * RxJS-based data/error/loading streams.
+ *
+ * Tasks are enqueued via `.execute()` and run sequentially. Each task gets its
+ * own `AbortController` whose signal is passed to the executor. The queue
+ * strategy determines how concurrent requests are handled.
+ *
+ * @typeParam TData - The data type returned by the executor.
+ * @typeParam TError - A custom error type (defaults to `unknown`).
+ * @typeParam TInput - An optional input object spread into the executor context.
+ * @param executor - Async function that receives `{ signal, ...input }` and returns data (or `null`).
+ * @param strategy - Queue strategy: `'FIFO'` (default), `'LIFO'`, or `'WAIT'`.
+ * @returns A {@link UseQueryResult} with reactive streams and control methods.
+ *
+ * @example
+ * ```ts
+ * // Basic query
+ * const users = useQuery<User[]>(async ({ signal }) => {
+ *   const res = await fetch('/api/users', { signal });
+ *   return res.json();
+ * });
+ *
+ * users.execute();
+ * users.data$.subscribe((data) => console.log(data));
+ * ```
+ *
+ * @example
+ * ```ts
+ * // With input and LIFO strategy
+ * const userQuery = useQuery<User, Error, { id: string }>(
+ *   async ({ signal, id }) => {
+ *     const res = await fetch(`/api/users/${id}`, { signal });
+ *     return res.json();
+ *   },
+ *   'LIFO'
+ * );
+ *
+ * userQuery.execute({ id: '42' });
+ * ```
+ *
+ * @example
+ * ```ts
+ * // With callbacks
+ * query.execute(undefined, {
+ *   next: (data) => console.log('loaded', data),
+ *   error: (err) => console.error('failed', err),
+ *   complete: () => console.log('done'),
+ * });
+ * ```
+ */
 export function useQuery<
   TData = unknown,
   TError = unknown,
@@ -326,6 +565,9 @@ export function useQuery<
   executor: (ctx: TInput & { signal: AbortSignal }) => Promise<TData | null>,
   strategy: ProcessStrategy = 'FIFO'
 ): UseQueryResult<TData, TError, Record<never, never>, TInput> {
+  let currentExecutor: (ctx: TInput & { signal: AbortSignal }) => Promise<TData | null> = executor;
+  let currentStrategy: ProcessStrategy = strategy;
+
   const dataState: DataSubject<TData, Record<never, never>> = new DataSubject<TData>(null);
   const errorState = new BehaviorSubject<TError | Error | null>(null);
   const loadingState = new BehaviorSubject<boolean>(false);
@@ -386,7 +628,7 @@ export function useQuery<
 
     const task: QueuedTask<TInput, TData, TError> = {
       id: ++taskIdCounter,
-      executor,
+      executor: currentExecutor,
       input,
       controller,
       callbacks
@@ -396,7 +638,7 @@ export function useQuery<
       controller.abort();
     };
 
-    if (strategy === 'LIFO') {
+    if (currentStrategy === 'LIFO') {
       const currentQueue = queue$.getValue();
       currentQueue.forEach((t) => t.controller.abort());
       queue$.next([task]);
@@ -405,7 +647,7 @@ export function useQuery<
       return;
     }
 
-    if (strategy === 'WAIT' && queue$.getValue().length > 0) {
+    if (currentStrategy === 'WAIT' && queue$.getValue().length > 0) {
       return;
     }
 
@@ -463,6 +705,11 @@ export function useQuery<
     error$: errorState.asObservable(),
     loading$: loadingState.asObservable(),
     setRelations,
+    handler: (exec, strat) => {
+      currentExecutor = exec;
+      if (strat) currentStrategy = strat;
+      return result;
+    },
     execute: run as ExecuteFn<TInput, TData, TError>,
     cancel,
     reset,

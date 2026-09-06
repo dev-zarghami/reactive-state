@@ -2,10 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   entry: [
-    'src/index.ts',
-    'src/adapters/svelte.ts',
-    'src/adapters/vue.ts',
-    'src/adapters/react.ts'
+    'src/index.ts'
   ],
   format: ['cjs', 'esm'],
   dts: true,

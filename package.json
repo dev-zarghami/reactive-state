@@ -11,21 +11,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
-    },
-    "./svelte": {
-      "types": "./dist/adapters/svelte.d.ts",
-      "import": "./dist/adapters/svelte.mjs",
-      "require": "./dist/adapters/svelte.cjs"
-    },
-    "./vue": {
-      "types": "./dist/adapters/vue.d.ts",
-      "import": "./dist/adapters/vue.mjs",
-      "require": "./dist/adapters/vue.cjs"
-    },
-    "./react": {
-      "types": "./dist/adapters/react.d.ts",
-      "import": "./dist/adapters/react.mjs",
-      "require": "./dist/adapters/react.cjs"
     }
   },
   "files": [
@@ -50,8 +35,7 @@
     "jiti": "^2.7.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
-    "vue": "^3.5.41"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "decimal.js": "^10.6.0",

@@ -2,46 +2,53 @@
 
 ## What this is
 
-`@reactive/state` — private npm package: RxJS-based reactive query engine with a relation system and framework lifecycle adapters. Svelte + Vue adapters work; React adapter is a stub that always declines scope binding.
+`@reactive/state` — private npm package: RxJS-based reactive query engine (`useQuery`) with a keyed singleton container and a relation system. **No framework adapters ship anymore** — `src/adapters/` was deleted; the lifecycle adapter is user-supplied via `setLifecycleAdapter()` (see the examples' root layouts for the pattern).
 
-**Naming is stale everywhere**: package.json says `@reactive/state`, README says `@omp/core` and documents APIs that don't exist (`useApi`, `useSse`, `useWebsocket`, `fetchCurrencies`), source comments/warnings still say `@package/logic`. Trust `package.json`, `src/index.ts`, and actual source behavior over prose.
+- `package.json` exports only `"."` — no `./svelte` / `./vue` subpaths, and tsup builds only `src/index.ts`. Keep that alignment if adding entries.
+- `peerDependencies` (svelte non-optional, vue optional) are stale — `src/` imports no framework. `decimal.js`/`valibot` are unused by root `src` (valibot only in examples); `fake-indexeddb` devDep is a leftover.
+- No CI — verification is local only. No git repo either.
 
-No CI exists — verification is local only.
+## Known-broken right now (pre-existing, not your doing)
+
+- `src/core/lifecycle.test.ts` imports `reactAdapter` from `../adapters/react`, which no longer exists → that test file fails to load and `pnpm check-types` fails (TS2307).
+- `queryContainer.test.ts` "returns the same instance for the same key" fails: `defineQuery` accessors return a fresh `{...instance, sweep}` wrapper object per call, so `toBe` identity fails across calls even though the registry entry is shared.
 
 ## Commands
 
-Use pnpm; root `pnpm-lock.yaml` is authoritative. Full verification:
+Use pnpm (root `pnpm-lock.yaml` is authoritative). If `pnpm` isn't on PATH, `corepack pnpm` works. Full verification:
 
 ```bash
 pnpm lint && pnpm check-types && pnpm test && pnpm build
 ```
 
 ```bash
-pnpm dev          # tsup --watch
-pnpm test         # vitest run, src/**/*.test.ts
 pnpm test src/core/useQuery.test.ts -t "executes tasks in order"   # single file / test
 ```
 
-Tests are colocated in `src/core/*.test.ts` (queue strategies, relation basics, container refcounting, lifecycle delegation). Delayed disposal, LRU trimming, full relation joining, and adapter framework scopes lack direct tests.
+Tests are colocated in `src/core/*.test.ts` (queue strategies, relation basics, container refcounting, lifecycle delegation). Delayed disposal, LRU trimming, and full relation joining lack direct tests.
 
-`examples/svelte/` is a separate SvelteKit app with its own **npm** lockfile — run its commands from inside that dir (`dev`/`check`/`lint`/`build`; lint runs prettier first). It depends on the root package via an absolute `file:/…/reactive-state` path pointing at the **package root, not `dist/`** — a copied `dist/` has no manifest and only resolves by index fallback; also npm turns relative `file:` paths into broken symlinks. **Build the root package first** (types resolve into `dist/*.d.ts`). Never regenerate one lockfile with the other package manager. The example is the working reference for the root API (adapter install via `import '@reactive/state/svelte'` in `+layout.svelte`, container-managed queries via `defineQuery`, relations via `.with([...])`, RxJS streams consumed in templates directly with Svelte's `$` auto-subscription — `Subscription.unsubscribe` satisfies the store contract; call `cancel()` in `onDestroy` since container disposal is delayed) — keep it compiling when the API changes.
+### Examples (`examples/`, both independent npm projects)
+
+Neither depends on the package: both import the root package via **relative source paths** (`'../../../../src'`) — no root build needed; source changes take effect directly. Keep them compiling when the API changes; they are the working reference. No test scripts in either.
+
+- `examples/svelte/` — SvelteKit app, npm lockfile. Run from inside the dir: `dev` / `check` / `lint` (prettier check first) / `build`. Manual adapter install in `+layout.svelte`; queries via `defineQuery` + `.handler()`; joins via `data$.with([...])`.
+- `examples/react/` — Next.js 16 App Router app, npm lockfile, `next dev -p 4100`. It has its own Next-generated `AGENTS.md`: this Next version is newer than training data — consult `node_modules/next/dist/docs/` in that dir before editing it. React has no scope model; pages call `query.sweep()` manually.
+
+**Lockfile hazard**: the repo root has *both* `pnpm-lock.yaml` (authoritative; node_modules is pnpm-managed) and a stray npm `package-lock.json`. The examples are npm-only. Never regenerate one lockfile with the other package manager. `pnpm-workspace.yaml` is **not** a workspace — it only contains esbuild build approval.
+
+## Core architecture
+
+- `src/core/useQuery.ts` — the whole engine: `useQuery(executor, strategy)` with `'FIFO' | 'LIFO' | 'WAIT'` (LIFO aborts pending work and runs newest; WAIT ignores new work while busy), per-task AbortControllers (signal passed to executor), `data$`/`error$`/`loading$` subjects plus manual setters `setData`/`setError`/`setLoading`, `handler(executor, strategy?)` to swap executor, `execute([input][, {next,error,complete}])/cancel/reset/dispose`. **Always dispose on teardown** — it aborts current work and completes all subjects.
+- Relations also live in useQuery.ts: `setRelations()` attaches enumerable lazy getters resolved against latest emissions; join via `data$.with(keys)` (`DataSubject`, exported); `sourceQuery` factories are cached by function identity and auto-executed once when empty; `includeDefault` folds a relation into plain `data$`.
+- `src/core/queryContainer.ts` / `defineQuery(key, factory)` — process-global keyed singleton registry. The factory receives a pre-created `useQuery(async () => null)` instance (configure via `.handler()` / `.setRelations()`, then return it); each accessor call refcounts++ and returns `{...instance, sweep}` typed as `Omit<T, 'handler' | 'setRelations' | 'dispose'>` — `sweep()` decrements the refcount manually (the React-example pattern). Disposal scheduled adaptively after 5/10/30 s by usage tier; best-effort LRU trim above 100 entries; `configureContainer({debug, ...delays/thresholds/maxEntries})`.
+- `src/core/lifecycle.ts` — one process-global `LifecycleAdapter`; `onScopeDispose(cb)` returns `false` when no adapter/scope is active and retains no fallback → caller owns `dispose()`.
+- `src/example.ts` is a commented design sketch, not executable code. `CLAUDE.md` exists but is partially stale (references the deleted `src/adapters/*`); trust source over it.
 
 ## Packaging gotchas
 
 - tsup emits CJS as `dist/*.js`, but package.json maps `require` to `dist/*.cjs`. The CJS entry is broken; reconcile before relying on `require()` or publishing.
-- Root barrel (`src/index.ts`) exports all adapter modules → importing `@reactive/state` evaluates them at import time, leaving the **Vue adapter installed last**. Adapters self-install on import (side effect), which conflicts with `"sideEffects": false` — bundlers may tree-shake them.
-- Keep `src/index.ts` exports, `tsup.config.ts` entries, and `package.json` subpath exports aligned when changing either side.
-- `decimal.js` and `valibot` are declared deps but unused by root `src` (valibot appears only in the example). `fake-indexeddb` devDep is a leftover — the old IndexedDB store module was removed.
-
-## Core architecture
-
-- `src/core/useQuery.ts` — the whole engine: `useQuery(executor, strategy)` with `'FIFO' | 'LIFO' | 'WAIT'`, per-task AbortControllers (signal passed to executor), `data$`/`error$`/`loading$` subjects, `execute([input][, callbacks])/cancel/reset/dispose`. **Always dispose on teardown** — it aborts current work and completes all subjects.
-- Relations also live in useQuery.ts: `setRelations()` attaches enumerable lazy getters resolved against latest emissions; join via `data$.with(keys)`; `sourceQuery` factories are cached by function identity and auto-executed once when empty; `includeDefault` folds a relation into plain `data$`.
-- `queryContainer.ts` / `defineQuery(key, factory)` — process-global keyed singleton registry with refcounting; disposal scheduled adaptively after 5/10/30 s by usage tier; best-effort LRU trim above 100 entries; `configureContainer({debug})` toggles logs.
-- `lifecycle.ts` — one process-global `LifecycleAdapter`; `onScopeDispose(cb)` returns `false` when no adapter/scope is active and retains no fallback → caller owns `dispose()`.
-- `src/example.ts` is a commented design sketch, not executable code.
+- `queryContainer.ts` runs a module-level RxJS pipeline (disposal-timer subject) at import — relevant with `"sideEffects": false` and tree-shaking.
 
 ## Conventions
 
 - ESLint errors on unused vars except `_`-prefixed args. TypeScript strict, ES2022 target, bundler moduleResolution.
-- No comments in code unless asked.

@@ -5,10 +5,12 @@ export type {
   RelationConfig,
   RelationSourceConfig,
   RelationMap,
-  ExecCallbacks
+  ExecCallbacks,
+  ProcessStrategy
 } from './core/useQuery';
 
-export { defineQuery, configureContainer } from './core/queryContainer';
+export { defineQuery, configureContainer, _getRegistryEntry, _evictRegistryEntry } from './core/queryContainer';
+export type { ContainerConfig } from './core/queryContainer';
 
 export {
   setLifecycleAdapter,
@@ -16,7 +18,3 @@ export {
   onScopeDispose
 } from './core/lifecycle';
 export type { LifecycleAdapter, Cleanup } from './core/lifecycle';
-
-export { svelteAdapter, useSvelteAdapter } from './adapters/svelte';
-export { vueAdapter, useVueAdapter } from './adapters/vue';
-export { reactAdapter, useReactAdapter } from './adapters/react';

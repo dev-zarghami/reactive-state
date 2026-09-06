@@ -315,4 +315,44 @@ describe('useQuery', () => {
       query.dispose();
     });
   });
+
+  describe('handler', () => {
+    it('replaces the executor for subsequent executions', async () => {
+      const query = useQuery(async () => 'original');
+      const newExecutor = vi.fn(async () => 'replaced');
+
+      query.handler(newExecutor);
+      query.execute();
+      await delay(20);
+
+      expect(newExecutor).toHaveBeenCalled();
+      expect(query.data$.getValue()).toBe('replaced');
+      query.dispose();
+    });
+
+    it('is chainable — returns the query result', () => {
+      const query = useQuery<string>(async () => null);
+      const returned = query.handler(async () => 'test');
+      expect(returned).toBe(query);
+      query.dispose();
+    });
+
+    it('replaces the strategy', async () => {
+      const executor = vi.fn(async (ctx: { id: number } & { signal: AbortSignal }) => {
+        await delay(10);
+        return ctx.id;
+      });
+      const query = useQuery(executor, 'FIFO');
+
+      query.handler(executor, 'LIFO');
+
+      query.execute({ id: 1 });
+      query.execute({ id: 2 });
+      query.execute({ id: 3 });
+      await delay(60);
+
+      expect(query.data$.getValue()).toBe(3);
+      query.dispose();
+    });
+  });
 });

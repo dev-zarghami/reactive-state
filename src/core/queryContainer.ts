@@ -1,247 +1,311 @@
-import { Subject, timer } from 'rxjs';
-import { filter, takeUntil, map, mergeMap } from 'rxjs/operators';
-import { onScopeDispose } from './lifecycle';
+import {Subject, timer} from 'rxjs';
+import {filter, takeUntil, map, mergeMap} from 'rxjs/operators';
+import {onScopeDispose} from './lifecycle';
+import {useQuery} from './useQuery';
 
-type QueryFactory<T extends object> = () => T;
+type QueryFactory<T extends object> = (query: T) => T;
 
-/**
- * Internal registry entry storing:
- * - instance       → the created query object
- * - refCount       → number of active consumers currently using it
- * - createdAt      → timestamp when entry was created
- * - lastUsed       → timestamp of most recent usage
- * - usageCount     → total usage count used for adaptive disposal delay
- */
 type RegistryEntry<T extends object> = {
-  instance: T & { dispose?: () => void };
-  refCount: number;
-  createdAt: number;
-  lastUsed: number;
-  usageCount: number;
+    instance: T & { dispose?: () => void };
+    refCount: number;
+    createdAt: number;
+    lastUsed: number;
+    usageCount: number;
 };
 
 type DisposalRequest = {
-  key: string;
-  entry: RegistryEntry<object>;
-  delay: number;
+    key: string;
+    entry: RegistryEntry<object>;
+    delay: number;
 };
 
-// ======================================================
-// DEBUG (opt-in)
-// ======================================================
+type DefinedQueryResult<T extends object> =
+    Omit<T, 'handler' | 'setRelations' | 'dispose'> & {
+    sweep: () => void;
+};
+
 
 let debugEnabled = false;
 
-/** Toggle the container's diagnostic logging (INIT/REUSE/REF±/DISPOSE/TRIM). */
-export function configureContainer(options: { debug?: boolean }): void {
-  if (typeof options.debug === 'boolean') debugEnabled = options.debug;
+/**
+ * Configuration options for the query container.
+ *
+ * @example
+ * ```ts
+ * configureContainer({
+ *   debug: true,
+ *   maxEntries: 200,
+ *   baseDisposalDelay: 10_000,
+ * });
+ * ```
+ */
+export type ContainerConfig = {
+    /** Enable diagnostic logging (INIT/REUSE/REF±/DISPOSE/TRIM). Defaults to `false`. */
+    debug?: boolean;
+    /** Disposal delay (ms) for low-usage entries. Defaults to `5000`. */
+    baseDisposalDelay?: number;
+    /** Disposal delay (ms) for moderately-used entries (usageCount >= hotThreshold). Defaults to `10000`. */
+    hotDisposalDelay?: number;
+    /** Disposal delay (ms) for heavily-used entries (usageCount >= veryHotThreshold). Defaults to `30000`. */
+    veryHotDisposalDelay?: number;
+    /** Usage count at which an entry is considered "hot". Defaults to `5`. */
+    hotThreshold?: number;
+    /** Usage count at which an entry is considered "very hot". Defaults to `10`. */
+    veryHotThreshold?: number;
+    /** Soft cap on the number of cached entries. LRU trimming evicts unused entries above this limit. Defaults to `100`. */
+    maxEntries?: number;
+};
+
+/**
+ * Configure the query container's debug logging, disposal delays, and LRU
+ * trimming thresholds. All options are optional and merged into the current
+ * config. Call once at app startup (e.g. in a root layout).
+ *
+ * @param options - Partial {@link ContainerConfig}.
+ *
+ * @example
+ * ```ts
+ * import { configureContainer } from '@reactive/state';
+ *
+ * // Enable debug logging in development
+ * configureContainer({ debug: import.meta.env.DEV });
+ *
+ * // Customize disposal timing
+ * configureContainer({
+ *   baseDisposalDelay: 10_000,
+ *   hotDisposalDelay: 30_000,
+ *   maxEntries: 200,
+ * });
+ * ```
+ */
+export function configureContainer(options: ContainerConfig): void {
+    if (typeof options.debug === 'boolean') debugEnabled = options.debug;
+    if (typeof options.baseDisposalDelay === 'number') CONFIG.BASE_DISPOSAL_DELAY = options.baseDisposalDelay;
+    if (typeof options.hotDisposalDelay === 'number') CONFIG.HOT_DISPOSAL_DELAY = options.hotDisposalDelay;
+    if (typeof options.veryHotDisposalDelay === 'number') CONFIG.VERY_HOT_DISPOSAL_DELAY = options.veryHotDisposalDelay;
+    if (typeof options.hotThreshold === 'number') CONFIG.HOT_THRESHOLD = options.hotThreshold;
+    if (typeof options.veryHotThreshold === 'number') CONFIG.VERY_HOT_THRESHOLD = options.veryHotThreshold;
+    if (typeof options.maxEntries === 'number') CONFIG.MAX_ENTRIES = options.maxEntries;
 }
 
 // ======================================================
 // GLOBAL CACHE REGISTRY + DISPOSAL SIGNALING PIPELINE
 // ======================================================
 
-/**
- * Main in-memory registry:
- * key → { instance, metadata }
- */
 const _registry = new Map<string, RegistryEntry<object>>();
-
-/**
- * RxJS subjects:
- * - disposalRequests → entries scheduled for disposal
- * - cancelDisposal   → signals that a previously scheduled disposal must be cancelled
- */
 const disposalRequests = new Subject<DisposalRequest>();
 const cancelDisposal = new Subject<string>();
 
-/**
- * Centralized configuration for adaptive disposal and LRU trimming.
- */
 const CONFIG = {
-  BASE_DISPOSAL_DELAY: 5000, // default disposal delay for low-usage entries
-  HOT_DISPOSAL_DELAY: 10000, // delay for moderately-used entries
-  VERY_HOT_DISPOSAL_DELAY: 30000, // delay for heavily-used entries
+    BASE_DISPOSAL_DELAY: 5000,
+    HOT_DISPOSAL_DELAY: 10000,
+    VERY_HOT_DISPOSAL_DELAY: 30000,
+    HOT_THRESHOLD: 5,
+    VERY_HOT_THRESHOLD: 10,
+    MAX_ENTRIES: 100
+};
 
-  HOT_THRESHOLD: 5, // usageCount >= 5 → hot
-  VERY_HOT_THRESHOLD: 10, // usageCount >= 10 → very hot
-
-  MAX_ENTRIES: 100 // soft limit for registry size
-} as const;
-
-// ======================================================
-// ADAPTIVE DISPOSAL DELAY + LRU-STYLE TRIMMING
-// ======================================================
-
-/**
- * Determines disposal delay based on usageCount.
- * The more frequently an instance is used, the longer we keep it alive.
- */
 function getDisposalDelay(entry: RegistryEntry<object>): number {
-  if (entry.usageCount >= CONFIG.VERY_HOT_THRESHOLD) return CONFIG.VERY_HOT_DISPOSAL_DELAY;
-  if (entry.usageCount >= CONFIG.HOT_THRESHOLD) return CONFIG.HOT_DISPOSAL_DELAY;
-  return CONFIG.BASE_DISPOSAL_DELAY;
+    if (entry.usageCount >= CONFIG.VERY_HOT_THRESHOLD) return CONFIG.VERY_HOT_DISPOSAL_DELAY;
+    if (entry.usageCount >= CONFIG.HOT_THRESHOLD) return CONFIG.HOT_DISPOSAL_DELAY;
+    return CONFIG.BASE_DISPOSAL_DELAY;
 }
 
-/**
- * LRU trimming to keep registry size under MAX_ENTRIES.
- * Removes the least recently used entries *only if* they have no active users.
- */
 function trimRegistry() {
-  if (_registry.size <= CONFIG.MAX_ENTRIES) return;
+    if (_registry.size <= CONFIG.MAX_ENTRIES) return;
 
-  const candidates: Array<{ key: string; entry: RegistryEntry<object> }> = [];
+    const candidates: Array<{ key: string; entry: RegistryEntry<object> }> = [];
 
-  for (const [key, entry] of _registry.entries()) {
-    if (entry.refCount <= 0) candidates.push({ key, entry });
-  }
+    for (const [key, entry] of _registry.entries()) {
+        if (entry.refCount <= 0) candidates.push({key, entry});
+    }
 
-  if (candidates.length === 0) return;
+    if (candidates.length === 0) return;
 
-  // Sort unused entries by lastUsed (oldest first)
-  candidates.sort((a, b) => a.entry.lastUsed - b.entry.lastUsed);
+    candidates.sort((a, b) => a.entry.lastUsed - b.entry.lastUsed);
 
-  // Remove until registry is back under limit
-  for (const { key, entry } of candidates) {
-    if (_registry.size <= CONFIG.MAX_ENTRIES) break;
+    for (const {key, entry} of candidates) {
+        if (_registry.size <= CONFIG.MAX_ENTRIES) break;
 
-    try {
-      entry.instance.dispose?.();
-    } catch { /* intentionally empty */ }
+        try {
+            entry.instance.dispose?.();
+        } catch { /* intentionally empty */
+        }
 
-    _registry.delete(key);
+        _registry.delete(key);
 
-    if (debugEnabled) console.log(`[TRIM] LRU evicted: ${key}`);
-  }
+        if (debugEnabled) console.log(`[TRIM] LRU evicted: ${key}`);
+    }
 }
-
-// ======================================================
-// CENTRAL DISPOSAL PIPELINE (RxJS)
-// ------------------------------------------------------
-// Each disposal request schedules a timer.
-// If cancelDisposal emits the same key before the timer ends,
-// the disposal is aborted.
-// ======================================================
 
 disposalRequests
-  .pipe(
-    mergeMap(({ key, entry, delay }) =>
-      timer(delay).pipe(
-        takeUntil(cancelDisposal.pipe(filter((k) => k === key))),
-        map(() => ({ key, entry }))
-      )
+    .pipe(
+        mergeMap(({key, entry, delay}) =>
+            timer(delay).pipe(
+                takeUntil(cancelDisposal.pipe(filter((k) => k === key))),
+                map(() => ({key, entry}))
+            )
+        )
     )
-  )
-  .subscribe(({ key }) => {
-    // Only dispose if the entry still exists and is unused
-    if (!_registry.has(key)) return;
+    .subscribe(({key, entry}) => {
+        // entry identity (not just key) must match — a stale timer from a
+        // previously-evicted entry at the same key must never dispose a
+        // newer entry that has since taken that key's place.
+        const current = _registry.get(key);
+        if (!current || current !== entry || current.refCount > 0) return;
 
-    const current = _registry.get(key);
-    if (!current || current.refCount > 0) return;
+        try {
+            current.instance.dispose?.();
+        } catch {
+            if (debugEnabled) console.warn(`[DISPOSE-ERROR] ${key}`);
+        }
 
-    try {
-      current.instance.dispose?.();
-    } catch { /* intentionally empty */ }
+        _registry.delete(key);
 
-    _registry.delete(key);
-
-    if (debugEnabled) console.log(`[DISPOSE] ${key}`);
-  });
-
-// ======================================================
-// DEBUG LOGGING
-// ======================================================
-
-function groupLog(event: string, key: string, entry: RegistryEntry<object>) {
-  if (!debugEnabled) return;
-  console.groupCollapsed(`[${event}] ${key}`);
-  console.table({
-    event,
-    key,
-    refCount: entry.refCount,
-    usageCount: entry.usageCount,
-    createdAt: new Date(entry.createdAt).toLocaleString(),
-    lastUsed: new Date(entry.lastUsed).toLocaleString()
-  });
-  console.groupEnd();
-}
-
-// ======================================================
-// CORE REGISTRY OPERATIONS
-// ======================================================
-
-/**
- * Retrieves an entry by key or creates a new instance via factory().
- */
-function getOrCreateEntry<T extends object>(key: string, create: () => T): RegistryEntry<T> {
-  let entry = _registry.get(key) as RegistryEntry<T> | undefined;
-
-  if (!entry) {
-    const instance = create();
-    const now = Date.now();
-
-    entry = {
-      instance,
-      refCount: 0,
-      createdAt: now,
-      lastUsed: now,
-      usageCount: 0
-    };
-
-    _registry.set(key, entry);
-    trimRegistry(); // ensure registry stays bounded
-
-    groupLog('INIT', key, entry);
-  } else {
-    groupLog('REUSE', key, entry);
-  }
-
-  return entry;
-}
-
-/**
- * Marks the entry as actively used.
- * - increments refCount
- * - increments usageCount
- * - refreshes lastUsed timestamp
- * - cancels any ongoing disposal timer
- */
-function useEntry<T extends object>(key: string, entry: RegistryEntry<T>) {
-  const now = Date.now();
-
-  entry.refCount++;
-  entry.usageCount++;
-  entry.lastUsed = now;
-
-  cancelDisposal.next(key);
-
-  groupLog('REF++', key, entry);
-}
-
-// ======================================================
-// defineQuery: keyed, refcounted, auto-disposed query factory
-// ------------------------------------------------------
-// Returns an accessor that yields a shared instance, increments usage/refCount,
-// and wires disposal into the active consumer scope via the lifecycle adapter.
-// ======================================================
-
-export function defineQuery<T extends object>(key: string, factory: QueryFactory<T>): () => T {
-  return () => {
-    const entry = getOrCreateEntry<T>(key, factory);
-    useEntry(key, entry);
-
-    // Release the ref when the active consumer scope tears down.
-    onScopeDispose(() => {
-      entry.refCount--;
-      groupLog('REF--', key, entry);
-
-      if (entry.refCount <= 0) {
-        const delay = getDisposalDelay(entry);
-        disposalRequests.next({ key, entry, delay });
-        groupLog('WILL-DISPOSE', key, entry);
-      }
+        if (debugEnabled) console.log(`[DISPOSE] ${key}`);
     });
 
-    return entry.instance;
-  };
+function groupLog(event: string, key: string, entry: RegistryEntry<object>) {
+    if (!debugEnabled) return;
+    console.groupCollapsed(`[${event}] ${key}`);
+    console.table({
+        event,
+        key,
+        refCount: entry.refCount,
+        usageCount: entry.usageCount,
+        createdAt: new Date(entry.createdAt).toLocaleString(),
+        lastUsed: new Date(entry.lastUsed).toLocaleString()
+    });
+    console.groupEnd();
+}
+
+function getOrCreateEntry<T extends object>(key: string, create: (query: T) => T): RegistryEntry<T> {
+    let entry = _registry.get(key) as RegistryEntry<T> | undefined;
+
+    if (!entry) {
+        const query = useQuery(async () => null) as unknown as T;
+        const instance = create(query);
+        const now = Date.now();
+
+        entry = {
+            instance,
+            refCount: 0,
+            createdAt: now,
+            lastUsed: now,
+            usageCount: 0
+        };
+
+        _registry.set(key, entry);
+        trimRegistry();
+
+        groupLog('INIT', key, entry);
+    } else {
+        groupLog('REUSE', key, entry);
+    }
+
+    return entry;
+}
+
+function useEntry<T extends object>(key: string, entry: RegistryEntry<T>) {
+    const now = Date.now();
+
+    entry.refCount++;
+    entry.usageCount++;
+    entry.lastUsed = now;
+
+    cancelDisposal.next(key);
+
+    groupLog('REF++', key, entry);
+}
+
+/**
+ * Create a keyed, ref-counted, auto-disposed query singleton. The factory
+ * receives a pre-created query instance — call `.handler()` to set the
+ * executor and `.setRelations()` to attach relation configs, then return the
+ * query.
+ *
+ * Subsequent calls with the same `key` return the cached instance (ref-count
+ * incremented). When all consumer scopes tear down, the instance is disposed
+ * after an adaptive delay (see {@link configureContainer}).
+ *
+ * @typeParam T - The query type (typically `UseQueryResult<...>`).
+ * @param key - Unique string key for the singleton cache.
+ * @param factory - Receives a query instance, configures it, and returns it.
+ * @returns An accessor function that yields the shared query instance.
+ *
+ * @example
+ * ```ts
+ * import { defineQuery, type UseQueryResult } from '@reactive/state';
+ * import { type Market } from './markets.model';
+ * import { fetchMarkets } from './markets.repository';
+ *
+ * export const useMarketsQuery = defineQuery('markets', (query: UseQueryResult<Market[], Error>) => {
+ *   query.handler(async ({ signal }) => {
+ *     const res = await fetch('/api/markets', { signal });
+ *     return res.json();
+ *   }, 'FIFO');
+ *
+ *   return query.setRelations({
+ *     baseCurrency: {
+ *       sourceQuery: useCurrenciesQuery,
+ *       foreignKey: (market) => market.baseCurrencyId,
+ *       keySelector: (currency) => currency.id,
+ *     },
+ *   });
+ * });
+ *
+ * // Usage in a component:
+ * const marketsQuery = useMarketsQuery();
+ * marketsQuery.execute();
+ * marketsQuery.data$.subscribe((data) => console.log(data));
+ * ```
+ */
+export function defineQuery<T extends object>(key: string, factory: QueryFactory<T>): () => DefinedQueryResult<T> {
+    return () => {
+        const entry = getOrCreateEntry<T>(key, factory);
+        useEntry(key, entry);
+
+        function sweep() {
+            entry.refCount--;
+            groupLog('REF--', key, entry);
+
+            if (entry.refCount <= 0) {
+                const delay = getDisposalDelay(entry);
+                disposalRequests.next({key, entry, delay});
+                groupLog('WILL-DISPOSE', key, entry);
+            }
+        }
+
+        onScopeDispose(() => sweep());
+
+        return {...entry.instance, sweep} as DefinedQueryResult<T>;
+    };
+}
+
+/**
+ * @internal Test-only accessor. Returns the raw registry entry for a key, or
+ * `undefined` if no entry exists. Not part of the public API.
+ */
+export function _getRegistryEntry(key: string): {
+    instance: unknown;
+    refCount: number;
+    usageCount: number
+} | undefined {
+    const entry = _registry.get(key);
+    if (!entry) return undefined;
+    return {instance: entry.instance, refCount: entry.refCount, usageCount: entry.usageCount};
+}
+
+/**
+ * @internal Test-only. Removes and disposes the entry at `key` from the
+ * registry, simulating what `trimRegistry` does. Not part of the public API.
+ */
+export function _evictRegistryEntry(key: string): void {
+    const entry = _registry.get(key);
+    if (!entry) return;
+    try {
+        entry.instance.dispose?.();
+    } catch { /* intentionally empty */
+    }
+    _registry.delete(key);
 }

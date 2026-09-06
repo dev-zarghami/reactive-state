@@ -1,11 +1,14 @@
-import {defineQuery, useQuery} from '@reactive/state';
+import {defineQuery, type UseQueryResult} from '../../../../../../src';
 import {type Currency} from '../currencies/currencies.model';
 import {useCurrenciesQuery} from '../currencies/currencies.query';
 import {type Market} from './markets.model';
 import {fetchMarkets} from './markets.repository';
 
-export const useMarketsQuery = defineQuery('markets', (query) => {
-    query.handler<Market[]>(async ({signal}) => await fetchMarkets({signal}), 'FIFO')
+export const useMarketsQuery = defineQuery('markets', (query: UseQueryResult<Market[], Error>) => {
+    /* set initial data */
+    query.setData([])
+
+    query.handler(async ({signal}) => await fetchMarkets({signal}), 'FIFO')
 
     return query.setRelations({
         baseCurrency: {
