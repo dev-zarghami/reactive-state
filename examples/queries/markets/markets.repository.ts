@@ -1,6 +1,6 @@
 import { type MarketDto, parseMarketDto } from './markets.dto';
 import { type Market, toDomainModel } from './markets.model';
-import { type FetchContext, requestJson } from 'examples/queries/api';
+import { type FetchContext, requestJson } from '../api';
 
 export async function fetchMarkets(context: FetchContext = {}): Promise<Market[]> {
 	const payload = await requestJson<{ status: string; data: MarketDto[] }>('/v2/market', context);

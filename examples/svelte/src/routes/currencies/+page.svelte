@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {onDestroy, onMount} from 'svelte';
+    import {onMount} from 'svelte';
     import {useCurrenciesQuery} from "../../../../queries/currencies/currencies.query";
 
     const currenciesQuery = useCurrenciesQuery();
@@ -8,8 +8,10 @@
     const currenciesError$ = currenciesQuery.error$;
     const currenciesData$ = currenciesQuery.data$;
 
-    onMount(() => currenciesQuery.execute());
-    onDestroy(() => currenciesQuery.cancel());
+    onMount(() => {
+        currenciesQuery.execute()
+        return () => currenciesQuery.cancel()
+    });
 </script>
 
 <main>

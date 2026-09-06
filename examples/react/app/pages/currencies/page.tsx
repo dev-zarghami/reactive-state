@@ -1,22 +1,22 @@
 "use client";
 
 import {useEffect} from "react";
-import {useCurrenciesQuery} from "../../queries/currencies/currencies.query";
-import type {Currency} from "../../queries/currencies/currencies.model";
+import {useCurrenciesQuery} from "../../../../queries/currencies/currencies.query";
 import {useStream} from "@/app/hooks/useStream";
 
 export default function CurrenciesPage() {
-    const query = useCurrenciesQuery();
+    const currenciesQuery = useCurrenciesQuery();
 
-    const data = useStream<Currency[] | null>(query.data$, null);
-    const loading = useStream<boolean>(query.loading$, false);
-    const error = useStream<Error | null>(query.error$, null);
+    const currenciesLoading = useStream(currenciesQuery.loading$, false);
+    const currenciesError = useStream(currenciesQuery.error$, null);
+    const currenciesData = useStream(currenciesQuery.data$, []);
 
     useEffect(() => {
-        query.execute();
+        currenciesQuery.execute();
+
         return () => {
-            query.cancel()
-            query.sweep()
+            currenciesQuery.cancel()
+            currenciesQuery.sweep()
         };
     }, []);
 
@@ -26,15 +26,15 @@ export default function CurrenciesPage() {
                 <h1 className="text-2xl font-semibold">Currencies</h1>
                 <button
                     className="px-4 py-2 rounded bg-foreground text-background disabled:opacity-50"
-                    onClick={() => query.execute()}
-                    disabled={loading}
+                    onClick={() => currenciesQuery.execute()}
+                    disabled={currenciesLoading}
                 >
                     Refresh
                 </button>
             </header>
-            {error ? (
-                <p className="text-red-600">{error.message}</p>
-            ) : loading && !data?.length ? (
+            {currenciesError ? (
+                <p className="text-red-600">{currenciesError.message}</p>
+            ) : currenciesLoading && !currenciesData?.length ? (
                 <p>Loading currencies...</p>
             ) : (
                 <table className="w-full border-collapse">
@@ -46,7 +46,7 @@ export default function CurrenciesPage() {
                     </tr>
                     </thead>
                     <tbody>
-                    {data?.map((row) => (
+                    {currenciesData?.map((row) => (
                         <tr key={row.symbol} className="border-b border-zinc-200">
                             <td className="py-2 px-2">{row.symbol}</td>
                             <td className="py-2 px-2">{row.nameEn}</td>

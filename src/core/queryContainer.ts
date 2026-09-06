@@ -1,9 +1,11 @@
 import {Subject, timer} from 'rxjs';
 import {filter, takeUntil, map, mergeMap} from 'rxjs/operators';
 import {onScopeDispose} from './lifecycle';
-import {useQuery} from './useQuery';
+import {useQuery, type UseQueryResult} from './useQuery';
 
-type QueryFactory<T extends object> = (query: T) => T;
+type QueryFactory<TData, TError, TResult extends object> = (
+    query: UseQueryResult<TData, TError>
+) => TResult;
 
 type RegistryEntry<T extends object> = {
     instance: T & { dispose?: () => void };
@@ -179,11 +181,14 @@ function groupLog(event: string, key: string, entry: RegistryEntry<object>) {
     console.groupEnd();
 }
 
-function getOrCreateEntry<T extends object>(key: string, create: (query: T) => T): RegistryEntry<T> {
-    let entry = _registry.get(key) as RegistryEntry<T> | undefined;
+function getOrCreateEntry<TData, TError, TResult extends object>(
+    key: string,
+    create: (query: UseQueryResult<TData, TError>) => TResult
+): RegistryEntry<TResult> {
+    let entry = _registry.get(key) as RegistryEntry<TResult> | undefined;
 
     if (!entry) {
-        const query = useQuery(async () => null) as unknown as T;
+        const query = useQuery(async () => null) as unknown as UseQueryResult<TData, TError>;
         const instance = create(query);
         const now = Date.now();
 
@@ -219,27 +224,33 @@ function useEntry<T extends object>(key: string, entry: RegistryEntry<T>) {
 }
 
 /**
- * Create a keyed, ref-counted, auto-disposed query singleton. The factory
- * receives a pre-created query instance — call `.handler()` to set the
- * executor and `.setRelations()` to attach relation configs, then return the
- * query.
+ * Create a keyed, ref-counted, auto-disposed query singleton. Called in two
+ * steps: `defineQuery<TData, TError>(key)` returns a factory-accepting
+ * function. The factory receives a pre-created query instance typed as
+ * `UseQueryResult<TData, TError>` — call `.handler()` to set the executor and
+ * `.setRelations()` to attach relation configs, then return the query.
+ * Relation types are inferred from the factory's return value.
+ *
+ * (The curried form is required: a trailing defaulted generic would swallow
+ * inference of the relation map from the factory's return type.)
  *
  * Subsequent calls with the same `key` return the cached instance (ref-count
  * incremented). When all consumer scopes tear down, the instance is disposed
  * after an adaptive delay (see {@link configureContainer}).
  *
- * @typeParam T - The query type (typically `UseQueryResult<...>`).
+ * @typeParam TData - The query's data type (e.g. `Market[]`).
+ * @typeParam TError - The query's custom error type (defaults to `unknown`).
  * @param key - Unique string key for the singleton cache.
- * @param factory - Receives a query instance, configures it, and returns it.
- * @returns An accessor function that yields the shared query instance.
+ * @returns A function that receives the configuring factory and returns an
+ * accessor yielding the shared query instance.
  *
  * @example
  * ```ts
- * import { defineQuery, type UseQueryResult } from '@reactive/state';
+ * import { defineQuery } from '@reactive/state';
  * import { type Market } from './markets.model';
  * import { fetchMarkets } from './markets.repository';
  *
- * export const useMarketsQuery = defineQuery('markets', (query: UseQueryResult<Market[], Error>) => {
+ * export const useMarketsQuery = defineQuery<Market[], Error>('markets')((query) => {
  *   query.handler(async ({ signal }) => {
  *     const res = await fetch('/api/markets', { signal });
  *     return res.json();
@@ -260,25 +271,29 @@ function useEntry<T extends object>(key: string, entry: RegistryEntry<T>) {
  * marketsQuery.data$.subscribe((data) => console.log(data));
  * ```
  */
-export function defineQuery<T extends object>(key: string, factory: QueryFactory<T>): () => DefinedQueryResult<T> {
-    return () => {
-        const entry = getOrCreateEntry<T>(key, factory);
-        useEntry(key, entry);
+export function defineQuery<TData = unknown, TError = unknown>(key: string) {
+    return <TResult extends object>(
+        factory: QueryFactory<TData, TError, TResult>
+    ): (() => DefinedQueryResult<TResult>) => {
+        return () => {
+            const entry = getOrCreateEntry<TData, TError, TResult>(key, factory);
+            useEntry(key, entry);
 
-        function sweep() {
-            entry.refCount--;
-            groupLog('REF--', key, entry);
+            function sweep() {
+                entry.refCount--;
+                groupLog('REF--', key, entry);
 
-            if (entry.refCount <= 0) {
-                const delay = getDisposalDelay(entry);
-                disposalRequests.next({key, entry, delay});
-                groupLog('WILL-DISPOSE', key, entry);
+                if (entry.refCount <= 0) {
+                    const delay = getDisposalDelay(entry);
+                    disposalRequests.next({key, entry, delay});
+                    groupLog('WILL-DISPOSE', key, entry);
+                }
             }
-        }
 
-        onScopeDispose(() => sweep());
+            onScopeDispose(() => sweep());
 
-        return {...entry.instance, sweep} as DefinedQueryResult<T>;
+            return {...entry.instance, sweep} as DefinedQueryResult<TResult>;
+        };
     };
 }
 

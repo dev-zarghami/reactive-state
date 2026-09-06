@@ -32,8 +32,8 @@ onMounted(() => {
     </section>
 
     <p v-if="marketsError" class="status error" role="alert">{{ marketsError.message }}</p>
-    <p v-else-if="marketsLoading && !marketsData.length" class="status">Loading markets…</p>
-    <p v-else-if="!marketsData.length" class="status">No markets returned.</p>
+    <p v-else-if="marketsLoading && !marketsData?.length" class="status">Loading markets…</p>
+    <p v-else-if="!marketsData?.length" class="status">No markets returned.</p>
 
     <div v-else class="table-shell" :aria-busy="marketsLoading">
       <table>

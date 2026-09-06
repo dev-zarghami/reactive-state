@@ -1,47 +1,17 @@
 <script setup lang="ts">
-import {computed, onMounted, onUnmounted, ref} from 'vue'
-import type {Currency} from '../../../queries/currencies/currencies.model'
+import {onMounted} from 'vue'
 import {useCurrenciesQuery} from '../../../queries/currencies/currencies.query'
+import {useRef} from "@/hooks/useRef.ts";
 
-const query = useCurrenciesQuery()
-const currencies = ref<Currency[]>([])
-const loading = ref(false)
-const error = ref<Error | null>(null)
-const subscriptions: Array<{ unsubscribe(): void }> = []
-const failedIcons = ref(new Set<string>())
+const currenciesQuery = useCurrenciesQuery()
 
-const hasCurrencies = computed(() => currencies.value.length > 0)
-
-function subscribeToQuery() {
-  subscriptions.push(
-      query.data$.subscribe((value) => {
-        currencies.value = value ?? []
-      }),
-      query.loading$.subscribe((value) => {
-        loading.value = value
-      }),
-      query.error$.subscribe((value) => {
-        error.value = value instanceof Error ? value : value ? new Error(String(value)) : null
-      }),
-  )
-}
-
-function refresh() {
-  error.value = null
-  query.execute()
-}
-
-function hideBrokenIcon(symbol: string) {
-  failedIcons.value = new Set(failedIcons.value).add(symbol)
-}
+const currenciesLoading = useRef(currenciesQuery.loading$, false)
+const currenciesError = useRef(currenciesQuery.error$, null)
+const currenciesData = useRef(currenciesQuery.data$.with(['baseCurrency', 'quoteCurrency']), [])
 
 onMounted(() => {
-  subscribeToQuery()
-  refresh()
-})
-
-onUnmounted(() => {
-  subscriptions.forEach((subscription) => subscription.unsubscribe())
+  currenciesQuery.execute()
+  return () => currenciesQuery.cancel()
 })
 </script>
 
@@ -56,16 +26,16 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <button class="action-button" type="button" :disabled="loading" @click="refresh">
-        {{ loading ? 'Loading…' : 'Refresh' }}
+      <button class="action-button" type="button" :disabled="currenciesLoading" @click="currenciesQuery.execute()">
+        {{ currenciesLoading ? 'Loading…' : 'Refresh' }}
       </button>
     </section>
 
-    <p v-if="error" class="status error" role="alert">{{ error.message }}</p>
-    <p v-else-if="loading && !hasCurrencies" class="status">Loading currencies…</p>
-    <p v-else-if="!hasCurrencies" class="status">No currencies returned.</p>
+    <p v-if="currenciesError" class="status error" role="alert">{{ currenciesError.message }}</p>
+    <p v-else-if="currenciesLoading && !currenciesData?.length" class="status">Loading currencies…</p>
+    <p v-else-if="!currenciesData?.length" class="status">No currencies returned.</p>
 
-    <div v-else class="table-shell" :aria-busy="loading">
+    <div v-else class="table-shell" :aria-busy="currenciesLoading">
       <table>
         <thead>
         <tr>
@@ -77,14 +47,13 @@ onUnmounted(() => {
         </tr>
         </thead>
         <tbody>
-        <tr v-for="currency in currencies" :key="currency.symbol">
+        <tr v-for="currency in currenciesData" :key="currency.symbol">
           <td>
               <span class="currency-cell">
                 <img
-                    v-if="currency.icon && !failedIcons.has(currency.symbol)"
+                    v-if="currency.icon"
                     :src="currency.icon"
                     :alt="`${currency.symbol} icon`"
-                    @error="hideBrokenIcon(currency.symbol)"
                 />
                 <span v-else class="icon-fallback">{{ currency.symbol.slice(0, 1) }}</span>
                 <span class="primary-cell">{{ currency.symbol }}</span>
