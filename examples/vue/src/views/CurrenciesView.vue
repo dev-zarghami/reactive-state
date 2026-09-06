@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { Currency } from '@/queries/currencies/currencies.model'
-import { useCurrenciesQuery } from '@/queries/currencies/currencies.query'
+import {computed, onMounted, onUnmounted, ref} from 'vue'
+import type {Currency} from '../../../queries/currencies/currencies.model'
+import {useCurrenciesQuery} from '../../../queries/currencies/currencies.query'
 
 const query = useCurrenciesQuery()
 const currencies = ref<Currency[]>([])
@@ -14,15 +14,15 @@ const hasCurrencies = computed(() => currencies.value.length > 0)
 
 function subscribeToQuery() {
   subscriptions.push(
-    query.data$.subscribe((value) => {
-      currencies.value = value ?? []
-    }),
-    query.loading$.subscribe((value) => {
-      loading.value = value
-    }),
-    query.error$.subscribe((value) => {
-      error.value = value instanceof Error ? value : value ? new Error(String(value)) : null
-    }),
+      query.data$.subscribe((value) => {
+        currencies.value = value ?? []
+      }),
+      query.loading$.subscribe((value) => {
+        loading.value = value
+      }),
+      query.error$.subscribe((value) => {
+        error.value = value instanceof Error ? value : value ? new Error(String(value)) : null
+      }),
   )
 }
 
@@ -68,37 +68,37 @@ onUnmounted(() => {
     <div v-else class="table-shell" :aria-busy="loading">
       <table>
         <thead>
-          <tr>
-            <th>Currency</th>
-            <th>English name</th>
-            <th>Persian name</th>
-            <th>Precision</th>
-            <th>Visibility</th>
-          </tr>
+        <tr>
+          <th>Currency</th>
+          <th>English name</th>
+          <th>Persian name</th>
+          <th>Precision</th>
+          <th>Visibility</th>
+        </tr>
         </thead>
         <tbody>
-          <tr v-for="currency in currencies" :key="currency.symbol">
-            <td>
+        <tr v-for="currency in currencies" :key="currency.symbol">
+          <td>
               <span class="currency-cell">
                 <img
-                  v-if="currency.icon && !failedIcons.has(currency.symbol)"
-                  :src="currency.icon"
-                  :alt="`${currency.symbol} icon`"
-                  @error="hideBrokenIcon(currency.symbol)"
+                    v-if="currency.icon && !failedIcons.has(currency.symbol)"
+                    :src="currency.icon"
+                    :alt="`${currency.symbol} icon`"
+                    @error="hideBrokenIcon(currency.symbol)"
                 />
                 <span v-else class="icon-fallback">{{ currency.symbol.slice(0, 1) }}</span>
                 <span class="primary-cell">{{ currency.symbol }}</span>
               </span>
-            </td>
-            <td>{{ currency.nameEn || '—' }}</td>
-            <td lang="fa" dir="rtl">{{ currency.nameFa || '—' }}</td>
-            <td>{{ currency.decimal }}</td>
-            <td>
+          </td>
+          <td>{{ currency.nameEn || '—' }}</td>
+          <td lang="fa" dir="rtl">{{ currency.nameFa || '—' }}</td>
+          <td>{{ currency.decimal }}</td>
+          <td>
               <span :class="['visibility', { visible: currency.isVisible }]">
                 {{ currency.isVisible ? 'Visible' : 'Hidden' }}
               </span>
-            </td>
-          </tr>
+          </td>
+        </tr>
         </tbody>
       </table>
     </div>

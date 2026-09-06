@@ -1,6 +1,6 @@
 import { type CurrencyDto, parseCurrencyDto } from './currencies.dto';
 import { type Currency, toCurrenciesModel } from './currencies.model';
-import { type FetchContext, requestJson } from '$lib/api';
+import { type FetchContext, requestJson } from 'examples/queries/api';
 
 export async function fetchCurrencies(context: FetchContext = {}): Promise<Currency[]> {
 	const payload = await requestJson<{ status: string; data: CurrencyDto[] }>(

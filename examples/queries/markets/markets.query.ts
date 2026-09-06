@@ -1,10 +1,10 @@
-import {defineQuery, type UseQueryResult} from '../../../../../../src';
+import {defineQuery} from '../../../src';
 import {type Currency} from '../currencies/currencies.model';
 import {useCurrenciesQuery} from '../currencies/currencies.query';
 import {type Market} from './markets.model';
 import {fetchMarkets} from './markets.repository';
 
-export const useMarketsQuery = defineQuery('markets', (query: UseQueryResult<Market[], Error>) => {
+export const useMarketsQuery = defineQuery<Market[], Error>('markets')((query) => {
     /* set initial data */
     query.setData([])
 

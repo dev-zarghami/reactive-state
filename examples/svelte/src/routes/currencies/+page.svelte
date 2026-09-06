@@ -1,6 +1,6 @@
 <script lang="ts">
     import {onDestroy, onMount} from 'svelte';
-    import {useCurrenciesQuery} from "$lib/queries/currencies/currencies.query.ts";
+    import {useCurrenciesQuery} from "../../../../queries/currencies/currencies.query";
 
     const currenciesQuery = useCurrenciesQuery();
 

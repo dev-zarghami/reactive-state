@@ -192,22 +192,19 @@ type ExecCallbacks<TData, TError> = {
 `defineQuery` returns an **accessor function**. Calling the accessor yields a shared, cached query instance — and increments a ref count. When every scope that called it tears down (via the lifecycle adapter), the instance is disposed after an adaptive delay.
 
 ```ts
-import { defineQuery, type UseQueryResult } from '@reactive/state';
+import { defineQuery } from '@reactive/state';
 
-export const useCurrenciesQuery = defineQuery(
-  'currencies',
-  (query: UseQueryResult<Currency[], Error>) => {
+export const useCurrenciesQuery = defineQuery<Currency[], Error>('currencies')((query) => {
     query.handler(async ({ signal }) => {
       const res = await fetch('/api/currencies', { signal });
       return res.json();
     }, 'FIFO');
 
     return query;
-  }
-);
+});
 ```
 
-The factory receives a pre-created query instance. Use `query.handler(...)` to set the executor and `query.setRelations(...)` to attach relations, then return the query.
+The factory receives a pre-created query instance typed from `defineQuery`'s `TData`/`TError` parameters. Use `query.handler(...)` to set the executor and `query.setRelations(...)` to attach relations, then return the query.
 
 Usage in a component:
 
@@ -235,7 +232,7 @@ Relations let you join the data of one query with the data of another, so each i
 Attach relation configs. Each entry maps a relation name to its source and join keys.
 
 ```ts
-export const useMarketsQuery = defineQuery('markets', (query: UseQueryResult<Market[], Error>) => {
+export const useMarketsQuery = defineQuery<Market[], Error>('markets')((query) => {
   query.handler(async ({ signal }) => {
     const res = await fetch('/api/markets', { signal });
     return res.json();
