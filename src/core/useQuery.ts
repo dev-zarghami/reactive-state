@@ -2,7 +2,7 @@ import {
   BehaviorSubject,
   Subject,
   Observable,
-  type PartialObserver,
+  type Observer,
   type Subscription,
   combineLatest,
   concatMap,
@@ -64,7 +64,7 @@ type ParentType<T> = T extends Array<infer U> ? U : T;
 
 type DataArray<T> = ReadonlyArray<T>;
 type ReadableStream<T> = {
-  subscribe: (observerOrNext?: PartialObserver<T> | ((value: T) => void)) => Subscription;
+  subscribe: (observerOrNext?: Partial<Observer<T>> | ((value: T) => void)) => Subscription;
   pipe: Observable<T>['pipe'];
 };
 type ValueReadableStream<T> = ReadableStream<T> & {
@@ -183,7 +183,7 @@ export type QueryDataStream<
 > = {
   subscribe: (
     observerOrNext?:
-      | PartialObserver<WithRelations<TData, TRelations> | null>
+      | Partial<Observer<WithRelations<TData, TRelations> | null>>
       | ((value: WithRelations<TData, TRelations> | null) => void)
   ) => Subscription;
   pipe: Observable<WithRelations<TData, TRelations> | null>['pipe'];

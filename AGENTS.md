@@ -27,13 +27,14 @@ pnpm test src/core/useQuery.test.ts -t "executes tasks in order"   # single file
 
 Tests are colocated in `src/core/*.test.ts` (queue strategies, relation basics, container refcounting, lifecycle delegation). Delayed disposal, LRU trimming, and full relation joining lack direct tests.
 
-### Examples (`examples/`, three independent npm projects)
+### Examples (`examples/`, four independent npm projects)
 
-Shared query modules live in `examples/queries/` (imported by all three apps via relative paths); the apps are svelte (SvelteKit), react (Next.js 16), and vue (Vite + vue-router). None depends on the package: all import the root package via **relative source paths** (`'../../../src'`) — no root build needed; source changes take effect directly. Keep them compiling when the API changes; they are the working reference. Only react/vue have typecheck scripts (`vue-tsc --build`, `tsc --noEmit`); svelte uses `check`.
+Shared query modules live in `examples/queries/` (imported by all four apps via relative paths); the apps are svelte (SvelteKit), react (Next.js 16), vue (Vite + vue-router), and angular (Angular 22, zoneless, minimal — no test framework). None depends on the package: all import the root package via **relative source paths** (`'../../../src'`) — no root build needed; source changes take effect directly. Keep them compiling when the API changes; they are the working reference. Only react/vue/angular have typecheck scripts (`vue-tsc --build`, `tsc --noEmit`, `ng build`); svelte uses `check`.
 
 - `examples/svelte/` — npm lockfile. Run from inside the dir: `dev` / `check` / `lint` (prettier check first) / `build`. Manual adapter install in `+layout.svelte`; queries via `defineQuery<T,E>(key)(factory)`; joins via `data$.with([...])`.
 - `examples/react/` — Next.js 16 App Router, `next dev -p 4100`. It has its own Next-generated `AGENTS.md`: this Next version is newer than training data — consult `node_modules/next/dist/docs/` in that dir before editing it. React has no scope model; pages call `query.sweep()` manually.
 - `examples/vue/` — npm; `type-check` runs `vue-tsc --build`. Adapter installed in `main.ts` via `getCurrentScope`/`onScopeDispose`.
+- `examples/angular/` — npm; verification is `ng build` (also typechecks). Dev serves on **4100** via `angular.json` (`ng serve`) — **collides with react's `next dev -p 4100`**; both can't run at once. Adapter in `main.ts` uses `inject(DestroyRef)` inside `onScopeDispose` — works because `defineQuery` accessors are called in field initializers (injection context); streams bind via `toSignal` (engine `QueryDataStream.subscribe` accepts `Partial<Observer<T>> | fn`, satisfying both rxjs `Subscribable` and Svelte's store contract).
 
 **Lockfile hazard**: the repo root has *both* `pnpm-lock.yaml` (authoritative; node_modules is pnpm-managed) and a stray npm `package-lock.json`. The examples are npm-only. Never regenerate one lockfile with the other package manager. `pnpm-workspace.yaml` is **not** a workspace — it only contains esbuild build approval.
 
