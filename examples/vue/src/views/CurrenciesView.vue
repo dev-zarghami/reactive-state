@@ -49,15 +49,7 @@ onMounted(() => {
         <tbody>
         <tr v-for="currency in currenciesData" :key="currency.symbol">
           <td>
-              <span class="currency-cell">
-                <img
-                    v-if="currency.icon"
-                    :src="currency.icon"
-                    :alt="`${currency.symbol} icon`"
-                />
-                <span v-else class="icon-fallback">{{ currency.symbol.slice(0, 1) }}</span>
-                <span class="primary-cell">{{ currency.symbol }}</span>
-              </span>
+            <span class="primary-cell">{{ currency.symbol }}</span>
           </td>
           <td>{{ currency.nameEn || '—' }}</td>
           <td lang="fa" dir="rtl">{{ currency.nameFa || '—' }}</td>

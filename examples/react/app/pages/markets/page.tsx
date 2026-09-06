@@ -12,6 +12,7 @@ export default function MarketsPage() {
     const marketsData = useStream(marketsQuery.data$.with(["baseCurrency", "quoteCurrency"]), []);
 
     useEffect(() => {
+        console.log('useEffect-------');
         marketsQuery.execute();
 
         return () => {
@@ -21,48 +22,69 @@ export default function MarketsPage() {
     }, []);
 
     return (
-        <main className="w-5xl mx-auto my-8 px-4 font-sans">
-            <header className="flex items-center justify-between mb-4">
-                <h1 className="text-2xl font-semibold">Markets</h1>
+        <main className="page-shell">
+            <section className="page-header">
+                <div>
+                    <p className="eyebrow">Relation query</p>
+                    <h1>Markets</h1>
+                    <p className="description">
+                        Live markets joined with shared base and quote currency queries through RxJS relations.
+                    </p>
+                </div>
+
                 <button
-                    className="px-4 py-2 rounded bg-foreground text-background disabled:opacity-50"
-                    onClick={() => marketsQuery.execute()}
+                    className="action-button"
+                    type="button"
                     disabled={marketsLoading}
+                    onClick={() => marketsQuery.execute()}
                 >
-                    Refresh
+                    {marketsLoading ? "Loading…" : "Refresh"}
                 </button>
-            </header>
+            </section>
+
             {marketsError ? (
-                <p className="text-red-600">{marketsError.message}</p>
+                <p className="status error" role="alert">{marketsError.message}</p>
             ) : marketsLoading && !marketsData?.length ? (
-                <p>Loading markets...</p>
+                <p className="status">Loading markets…</p>
+            ) : !marketsData?.length ? (
+                <p className="status">No markets returned.</p>
             ) : (
-                <table className="w-full border-collapse">
-                    <thead>
-                    <tr className="border-b border-zinc-300 text-left">
-                        <th className="py-2 px-2">Symbol</th>
-                        <th className="py-2 px-2">Price</th>
-                        <th className="py-2 px-2">24h change</th>
-                        <th className="py-2 px-2">Base currency</th>
-                        <th className="py-2 px-2">Quote currency</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {marketsData?.map((row) => (
-                        <tr key={row.id} className="border-b border-zinc-200">
-                            <td className="py-2 px-2">{row.symbol}</td>
-                            <td className="py-2 px-2">{row.price}</td>
-                            <td className="py-2 px-2">{row.price24h}</td>
-                            <td className="py-2 px-2">
-                                {row.baseCurrency?.nameEn ?? row.baseCurrencyId}
-                            </td>
-                            <td className="py-2 px-2">
-                                {row.quoteCurrency?.nameEn ?? row.quoteCurrencyId}
-                            </td>
+                <div className="table-shell table-markets" aria-busy={marketsLoading}>
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Price</th>
+                            <th>24h price</th>
+                            <th>Volume</th>
+                            <th>Base currency</th>
+                            <th>Quote currency</th>
                         </tr>
-                    ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                        {marketsData.map((market) => (
+                            <tr key={market.id}>
+                                <td className="primary-cell">{market.symbol}</td>
+                                <td>{market.price}</td>
+                                <td>{market.price24h}</td>
+                                <td>{market.volume24h}</td>
+                                <td>
+                                    <span className="primary-cell">
+                                        {market.baseCurrency?.nameEn ?? market.baseCurrencyId}
+                                    </span>
+                                    <span className="secondary-label">{market.baseCurrencyId}</span>
+                                </td>
+                                <td>
+                                    <span className="primary-cell">
+                                        {market.quoteCurrency?.nameEn ?? market.quoteCurrencyId}
+                                    </span>
+                                    <span className="secondary-label">{market.quoteCurrencyId}</span>
+                                </td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+                </div>
             )}
         </main>
     );

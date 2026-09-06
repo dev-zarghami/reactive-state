@@ -24,16 +24,6 @@ export default defineConfig(
 		}
 	},
 	{
-		files: [],
-		languageOptions: {
-			parserOptions: {
-				projectService: true,
-				extraFileExtensions: ['.svelte'],
-				parser: ts.parser
-			}
-		}
-	},
-	{
 		// Override or add rule settings here, such as:
 		// 'svelte/button-has-type': 'error'
 		rules: {}

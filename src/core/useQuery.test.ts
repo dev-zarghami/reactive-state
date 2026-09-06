@@ -314,6 +314,40 @@ describe('useQuery', () => {
       expect(withRelations.data$).toBeDefined();
       query.dispose();
     });
+
+    it('returns a stable stream reference for repeated .with() calls', () => {
+      const query = useQuery(async () => [{ id: '1', userId: 'u1' }]);
+      const relations = {
+        user: {
+          foreignKey: (parent: { userId: string }) => parent.userId,
+          keySelector: (related: { id: string }) => related.id
+        },
+        other: {
+          foreignKey: (parent: { userId: string }) => parent.userId,
+          keySelector: (related: { id: string }) => related.id
+        }
+      };
+      const withRelations = query.setRelations(relations);
+
+      // Repeated calls with the same keys return the same stream.
+      const userStream = withRelations.data$.with(['user']);
+      expect(withRelations.data$.with(['user'])).toBe(userStream);
+
+      // Key order must not matter.
+      expect(withRelations.data$.with(['user', 'other'])).toBe(
+        withRelations.data$.with(['other', 'user'])
+      );
+
+      // A different key set yields a distinct stream.
+      expect(userStream).not.toBe(withRelations.data$.with(['other']));
+
+      // Re-configuring relations replaces the streams.
+      const streamBefore = withRelations.data$.with(['other']);
+      const reconfigured = withRelations.setRelations(relations);
+      expect(reconfigured.data$.with(['other'])).not.toBe(streamBefore);
+
+      query.dispose();
+    });
   });
 
   describe('handler', () => {

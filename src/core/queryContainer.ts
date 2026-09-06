@@ -27,7 +27,7 @@ type DefinedQueryResult<T extends object> =
 };
 
 
-let debugEnabled = false;
+let debugEnabled = true;
 
 /**
  * Configuration options for the query container.

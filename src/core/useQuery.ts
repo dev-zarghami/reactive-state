@@ -314,6 +314,7 @@ function createRelationController<TData, TMap extends Record<string, unknown>>(
   const sourceCache = new Map<string, Observable<DataArray<unknown> | null>>();
   const sourceQueryCache = new Map<RelationSourceQuery, RelationQueryResult>();
   const executedSourceQueries = new Set<RelationSourceQuery>();
+  const joinedStreams = new Map<string, Observable<WithRelations<TData, TMap> | null>>();
 
   const hasSourceData = (queryResult?: RelationQueryResult) => {
     if (!queryResult?.data$) return false;
@@ -427,8 +428,14 @@ function createRelationController<TData, TMap extends Record<string, unknown>>(
 
   return {
     with: (keys) => {
+      const cacheKey = [...keys].sort().join('\u0000');
+      const cached = joinedStreams.get(cacheKey);
+      if (cached) return cached;
+
       const selected = allEntries.filter(([key]) => keys.includes(String(key)));
-      return buildStream(selected);
+      const stream = buildStream(selected);
+      joinedStreams.set(cacheKey, stream);
+      return stream;
     }
   };
 }
