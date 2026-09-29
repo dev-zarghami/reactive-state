@@ -1,7 +1,6 @@
 {
   "name": "@reactive/state",
   "version": "0.0.1",
-  "private": true,
   "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",

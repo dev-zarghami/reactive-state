@@ -2,7 +2,7 @@
 
 ## What this is
 
-`@reactive/state` — private npm package (`version 0.0.1`, `"private": true`, `publishConfig.access: public`): an RxJS reactive query engine (`useQuery`) plus a keyed singleton container (`defineQuery`) and a relation/join system.
+`@reactive/state` — npm package (`version 0.0.1`, `publishConfig.access: public`, **no** `private` field — pnpm's `publish3` throws on `manifest.private`, so it must stay absent to publish): an RxJS reactive query engine (`useQuery`) plus a keyed singleton container (`defineQuery`) and a relation/join system.
 
 - **No framework adapters ship.** `src/adapters/` was deleted in HEAD (`remove modules`). Lifecycle is user-supplied via `setLifecycleAdapter()` — the four example apps are the reference implementations.
 - Git repo **does** exist (`main`, `origin/main`). CI is **tag-triggered only**: `.github/workflows/npm-publish.yml` fires on `push: tags: ['v*.*.*']` — nothing runs on push to a branch or on a PR, so local verification is still the gate. The tag is the source of truth; the workflow rewrites `package.json`'s `version` from the `v`-stripped tag (rejecting non-semver tags) before publishing, so to release you just `git tag v0.0.2 && git push origin v0.0.2`. Bumping `package.json` by hand is not required and is harmless (it gets overwritten).
