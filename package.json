@@ -22,7 +22,15 @@
     "lint": "eslint src",
     "check-types": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "server": "npm start --prefix examples/server",
+    "server:dev": "npm run dev --prefix examples/server",
+    "example:svelte": "npm run dev --prefix examples/svelte",
+    "example:react": "npm run dev --prefix examples/react",
+    "example:vue": "npm run dev --prefix examples/vue",
+    "example:angular": "npm run start --prefix examples/angular",
+    "check:examples": "npm run check --prefix examples/svelte && npm run typecheck --prefix examples/react && npm run type-check --prefix examples/vue && npm run build --prefix examples/angular",
+    "install:examples": "npm install --prefix examples/server && npm install --prefix examples/svelte && npm install --prefix examples/react && npm install --prefix examples/vue && npm install --prefix examples/angular"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

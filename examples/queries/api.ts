@@ -1,4 +1,7 @@
-export const BASE_URL = 'https://api.ompfinex.com';
+// Fake backend shipped with the examples — run `npm start` in `examples/server/`.
+// Swap back to the real API by uncommenting the line below.
+// export const BASE_URL = 'https://api.ompfinex.com';
+export const BASE_URL = 'http://localhost:4000';
 
 export type FetchContext = {
 	signal?: AbortSignal;
