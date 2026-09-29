@@ -2,7 +2,7 @@
 
 An RxJS-based reactive query engine with a keyed singleton container and a relation system for joining related data.
 
-Built on [RxJS](https://rxjs.dev). Framework-agnostic — it integrates with a UI framework through a small, user-supplied lifecycle adapter.
+Built on [RxJS](https://rxjs.dev). Framework-agnostic — the engine never imports a UI framework. It integrates with any UI library through a small, **user-supplied lifecycle adapter** that bridges component teardown to the container's ref-counting.
 
 ## Table of contents
 
@@ -12,6 +12,7 @@ Built on [RxJS](https://rxjs.dev). Framework-agnostic — it integrates with a U
 - [Core API](#core-api)
   - [`useQuery`](#usequery)
   - [`UseQueryResult`](#usequeryresult)
+  - [`handler`](#handler)
   - [`data$`](#data)
   - [Strategies](#strategies)
   - [Execute callbacks](#execute-callbacks)
@@ -26,6 +27,11 @@ Built on [RxJS](https://rxjs.dev). Framework-agnostic — it integrates with a U
   - [`onScopeDispose`](#onscopedispose)
 - [Container configuration](#container-configuration)
 - [Framework integration](#framework-integration)
+  - [Svelte](#svelte)
+  - [Vue](#vue)
+  - [React](#react)
+  - [Angular](#angular)
+- [Examples](#examples)
 - [Development](#development)
 
 ## Installation
@@ -36,13 +42,13 @@ npm install @reactive/state
 pnpm add @reactive/state
 ```
 
-`rxjs` is a hard dependency.
+`rxjs` is a hard dependency and ships as the only runtime peer. No UI framework is imported — Svelte, Vue, React, and Angular integration is entirely up to the consumer.
 
 ## Concepts
 
 The package provides three layers:
 
-1. **`useQuery`** — a reactive primitive that runs an async function (executor), exposes its result, error, and loading state as RxJS observables, and supports an execution queue with abort control.
+1. **`useQuery`** — a reactive primitive that runs an async function (executor), exposes its result, error, and loading state as RxJS observables, and supports an execution queue with per-task abort control.
 2. **Relations** — join related queries so each item in your data automatically carries a lazily resolved related value.
 3. **`defineQuery`** — a process-global, keyed, ref-counted singleton registry that caches query instances and disposes them automatically when no scope needs them anymore.
 
@@ -82,7 +88,7 @@ useQuery<TData, TError, TInput>(
 
 Creates a reactive query. `TData` is the data type returned by the executor, `TError` a custom error type, and `TInput` an optional input object spread into the executor context.
 
-**`executor`** receives `{ signal, ...input }` and returns a `Promise<TData | null>`. Returning `null` clears the data stream. The `signal` is an `AbortController` signal that is aborted when the task is cancelled.
+**`executor`** receives `{ signal, ...input }` and returns a `Promise<TData | null>`. Returning `null` clears the data stream. The `signal` belongs to a per-task `AbortController` and is aborted when the task is cancelled.
 
 **`strategy`** controls how concurrent executions are queued — see [Strategies](#strategies).
 
@@ -105,7 +111,7 @@ userQuery.execute({ id: '42' });
 
 ### `UseQueryResult`
 
-The object returned by `useQuery` (and by calling a `defineQuery` accessor).
+The object returned by `useQuery` (and — minus a few keys, plus `sweep` — by calling a `defineQuery` accessor).
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -122,9 +128,19 @@ The object returned by `useQuery` (and by calling a `defineQuery` accessor).
 | `setError` | `(error) => void` | Push a value into `error$` directly. |
 | `setLoading` | `(status) => void` | Push a value into `loading$` directly. |
 
+Always `dispose()` a query you own when tearing down outside a framework scope — it aborts current work and completes all subjects.
+
+### `handler`
+
+Swap the executor (and optionally the strategy) after creation. Returns the same query instance, so it's chainable — this is how a `defineQuery` factory wires up its pre-created instance:
+
+```ts
+query.handler(async ({ signal }) => fetchMarkets({ signal }), 'FIFO');
+```
+
 ### `data$`
 
-`data$` is a `QueryDataStream` — a wrapper around an RxJS `Observable`.
+`data$` is a `QueryDataStream` — a wrapper around an RxJS `Observable`:
 
 ```ts
 // Subscribe to updates
@@ -141,25 +157,25 @@ query.data$.pipe(map((d) => d?.length)).subscribe((n) => console.log(n));
 query.data$.with(['baseCurrency']).subscribe((rows) => console.log(rows));
 ```
 
-In Svelte, `Subscription` satisfies Svelte's store contract, so you can auto-subscribe in templates:
+`subscribe` accepts either an observer object (`{ next?, error?, complete? }`) or a plain `next` function — it satisfies RxJS's `Subscribable` contract and, in Svelte, the store contract (see [Svelte](#svelte)).
 
-```svelte
-{$query.data$}
-```
+For advanced cases the underlying reactive primitive is exported as `DataSubject` — a `BehaviorSubject` subclass with relation-joining support.
 
 ### Strategies
 
 | Strategy | Behavior |
 |----------|----------|
 | `'FIFO'` | Tasks run in submission order (default). |
-| `'LIFO'` | New tasks abort all pending work and run immediately. |
-| `'WAIT'` | New tasks are ignored while one is already running. |
+| `'LIFO'` | New tasks abort all queued *and* running work, then run immediately. |
+| `'WAIT'` | New tasks are ignored while a task is already running. |
 
 ```ts
-const q1 = useQuery(fetchOne, 'FIFO');  // sequential
+const q1 = useQuery(fetchOne, 'FIFO');    // sequential
 const q2 = useQuery(fetchLatest, 'LIFO'); // always use latest
 const q3 = useQuery(fetchOnce, 'WAIT');   // don't overlap
 ```
+
+Every task gets its own `AbortController`; its `signal` is passed to the executor, so in-flight requests stop cleanly on `cancel()`, `reset()`, `dispose()`, or a superseding `'LIFO'` execution.
 
 ### Execute callbacks
 
@@ -173,7 +189,7 @@ query.execute(undefined, {
 });
 ```
 
-Execute callbacks are declared by the `ExecCallbacks` type:
+Callbacks are declared by the `ExecCallbacks` type:
 
 ```ts
 type ExecCallbacks<TData, TError> = {
@@ -185,43 +201,67 @@ type ExecCallbacks<TData, TError> = {
 
 ### Manual setters
 
-`setData`, `setError`, and `setLoading` push values directly into the corresponding streams. Useful for optimistic updates, cache seeding, or imperative control.
+`setData`, `setError`, and `setLoading` push values directly into the corresponding streams. Useful for optimistic updates, cache seeding, or imperative control:
+
+```ts
+query.setData([]);      // seed the stream before the first fetch
+query.setData(updated); // optimistic update
+```
 
 ## Keyed singletons with `defineQuery`
 
-`defineQuery` returns an **accessor function**. Calling the accessor yields a shared, cached query instance — and increments a ref count. When every scope that called it tears down (via the lifecycle adapter), the instance is disposed after an adaptive delay.
+`defineQuery` turns a query into a cached, shared, ref-counted singleton identified by a string key.
+
+It is called in **two steps**:
+
+```ts
+defineQuery<TData, TError>(key)  // → (factory) → accessor
+```
 
 ```ts
 import { defineQuery } from '@reactive/state';
 
 export const useCurrenciesQuery = defineQuery<Currency[], Error>('currencies')((query) => {
-    query.handler(async ({ signal }) => {
-      const res = await fetch('/api/currencies', { signal });
-      return res.json();
-    }, 'FIFO');
+  query.handler(async ({ signal }) => {
+    const res = await fetch('/api/currencies', { signal });
+    return res.json();
+  }, 'FIFO');
 
-    return query;
+  return query;
 });
 ```
 
-The factory receives a pre-created query instance typed from `defineQuery`'s `TData`/`TError` parameters. Use `query.handler(...)` to set the executor and `query.setRelations(...)` to attach relations, then return the query.
+The **factory** receives a pre-created query instance typed as `UseQueryResult<TData, TError>` — configure it with `query.handler(...)` and `query.setRelations(...)`, then return it (optionally the `setRelations(...)` result to type the relations).
 
-Usage in a component:
+> **Why curried?** TypeScript cannot both fix `TData`/`TError` up front *and* infer the relation map from the factory's return value in a single call — a trailing generic would have to default to "no relations" and TypeScript would skip inferring it (a defaulted type parameter is never inferred). The curried form — the same pattern as zustand's `create<T>()(...)` — solves both.
 
-```ts
-// Each call returns the same shared instance + increments ref count
-const currencies = useCurrenciesQuery();
+Calling the **accessor**:
 
-onMount(() => currencies.execute());
-onDestroy(() => currencies.cancel()); // disposal is handled by the container
-```
+- increments the entry's ref count and usage stats,
+- registers a cleanup on the active scope via the lifecycle adapter (so the ref count is released automatically on teardown),
+- and returns the shared instance — typed as `Omit<UseQueryResult<...>, 'handler' | 'setRelations' | 'dispose'>` plus **`sweep()`**.
 
 Key characteristics:
 
-- **Shared**: the same `key` always yields the same instance process-wide.
-- **Ref-counted**: each accessor call registers a cleanup on the active scope.
-- **Auto-disposed**: when ref count reaches 0, disposal is scheduled with an adaptive delay (5 s / 10 s / 30 s based on usage, configurable).
-- **LRU bounded**: the registry softly caps at 100 entries (`maxEntries`), evicting unused entries.
+- **Shared**: the same `key` always yields the same instance process-wide. (The wrapper object itself is recreated per call — compare contents, not identity.)
+- **Ref-counted**: each accessor call increments a ref count, released when its scope tears down.
+- **Auto-disposed**: when the ref count reaches 0, disposal is scheduled after an adaptive delay — 5 s / 10 s / 30 s depending on usage tier, all configurable. LRU trims the registry above `maxEntries`.
+- **`sweep()`**: the manual release for frameworks without a scope model (e.g. React). Call it once per accessor call when your component unmounts:
+
+```ts
+// React-style manual pattern
+const markets = useMarketsQuery();
+
+useEffect(() => {
+  markets.execute();
+  return () => {
+    markets.cancel();
+    markets.sweep(); // release this component's reference
+  };
+}, []);
+```
+
+Without a lifecycle adapter, `defineQuery` cannot register the cleanup itself — `sweep()` is what keeps ref counts honest.
 
 ## Relations
 
@@ -229,7 +269,7 @@ Relations let you join the data of one query with the data of another, so each i
 
 ### `setRelations`
 
-Attach relation configs. Each entry maps a relation name to its source and join keys.
+Attach relation configs. Each entry maps a relation name to its source and join keys:
 
 ```ts
 export const useMarketsQuery = defineQuery<Market[], Error>('markets')((query) => {
@@ -253,10 +293,10 @@ export const useMarketsQuery = defineQuery<Market[], Error>('markets')((query) =
 });
 ```
 
-- **`sourceQuery`** — an accessor to the related query (`defineQuery` result). When its data is empty, the source query is auto-executed once.
+- **`sourceQuery`** — an accessor to the related query (a `defineQuery` result). When its data is empty, the source query is auto-executed once.
 - **`foreignKey`** — given a parent item, returns the key used to find the related item.
 - **`keySelector`** — given a related item, returns its key.
-- **`source`** — alternatively, an explicit stream instead of / in addition to `sourceQuery`.
+- **`source`** — alternatively, an explicit observable of the related array instead of `sourceQuery`.
 - **`includeDefault`** — fold this relation into the default `data$` stream (see below).
 
 ### `data$.with`
@@ -271,14 +311,16 @@ const withBase = query.data$.with(['baseCurrency']);
 const withBoth = query.data$.with(['baseCurrency', 'quoteCurrency']);
 ```
 
-Each item in the resulting stream carries the relation as a lazily-resolved getter:
+Each item in the resulting stream carries the relation as a lazily-resolved property:
 
 ```ts
 row.baseCurrency?.nameEn ?? row.baseCurrencyId
 row.quoteCurrency?.nameEn ?? row.quoteCurrencyId
 ```
 
-Relations are resolved against the latest emission of the source query, so they stay reactive as the source updates.
+Relations are resolved against the latest emission of the source query, so they stay reactive as sources update.
+
+**Stable references.** Joined streams are cached per relation configuration: calling `.with(keys)` repeatedly — in any key order — returns the same `Observable` object until `setRelations` replaces the configuration. This makes `.with(...)` safe to use directly as a dependency in React's `useEffect`/`useMemo`. (Streams derived per render through other means, e.g. `.pipe(...)`, still need memoizing.)
 
 ### `includeDefault`
 
@@ -300,11 +342,11 @@ query.data$.subscribe((posts) => console.log(posts[0].user));
 
 ## Lifecycle management
 
-The engine never imports a UI framework. It relies on a **lifecycle adapter** to know when the current "scope" (a Svelte component, a Vue effect scope, …) is destroyed, so it can release ref counts and dispose cached queries.
+The engine never imports a UI framework. It relies on a **lifecycle adapter** to know when the current "scope" (a Svelte component, a Vue effect scope, an Angular `DestroyRef`, …) is destroyed, so it can release ref counts and dispose cached queries.
 
 ### Lifecycle adapter
 
-Install an adapter once at app startup. The adapter bridges your framework's component lifecycle to the container's ref-counting system.
+Install an adapter once at app startup. The adapter bridges your framework's component lifecycle to the container's ref-counting system:
 
 ```ts
 import { setLifecycleAdapter } from '@reactive/state';
@@ -330,7 +372,7 @@ interface LifecycleAdapter {
 }
 ```
 
-`onScopeDispose` must be called synchronously during a scope's setup and returns `false` when no active scope exists — letting callers fall back to manual disposal.
+`onScopeDispose` must be called synchronously during a scope's setup and returns `false` when no active scope exists — letting callers fall back to manual disposal. `getLifecycleAdapter()` returns the currently installed adapter (or `null`); `setLifecycleAdapter(null)` uninstalls.
 
 ### `onScopeDispose`
 
@@ -341,13 +383,13 @@ const bound = onScopeDispose(() => {
 
 // returns false when no adapter/scope is installed
 if (!bound) {
-  // you own disposal — call query.dispose() yourself
+  // you own disposal — call sweep()/dispose() yourself
 }
 ```
 
 ## Container configuration
 
-`configureContainer` tunes the singleton registry's debug logging, disposal delays, and LRU trimming.
+`configureContainer` tunes the singleton registry's debug logging, disposal delays, and LRU trimming:
 
 ```ts
 import { configureContainer } from '@reactive/state';
@@ -363,8 +405,6 @@ configureContainer({
 });
 ```
 
-`ContainerConfig`:
-
 | Option | Default | Description |
 |--------|---------|-------------|
 | `debug` | `false` | Enable diagnostic logging. |
@@ -375,55 +415,56 @@ configureContainer({
 | `veryHotThreshold` | `10` | Usage count at which an entry is "very hot". |
 | `maxEntries` | `100` | Soft cap on registry size; LRU trims unused entries above this. |
 
-Call it once at app startup, typically in a root layout.
+Call it once at app startup, typically in a root layout / entry file. Re-calling merges the given options into the existing config.
 
 ## Framework integration
 
-Integrate with any UI framework by installing a lifecycle adapter once (usually in a root layout), then using `defineQuery` accessors in your components.
+Integrate with any UI framework by installing a lifecycle adapter once (usually in a root layout / entry file), then using `defineQuery` accessors in your components. Working reference implementations for all four frameworks below live in [`examples/`](#examples).
 
-#### Svelte
+### Svelte
 
 ```svelte
 <!-- +layout.svelte -->
 <script lang="ts">
-	import { configureContainer, setLifecycleAdapter } from '@reactive/state';
-	import { onDestroy } from 'svelte';
+  import { configureContainer, setLifecycleAdapter } from '@reactive/state';
+  import { onDestroy } from 'svelte';
 
-	configureContainer({ debug: import.meta.env.DEV });
-	setLifecycleAdapter({
-		onScopeDispose(cleanup) {
-			try {
-				onDestroy(cleanup);
-				return true;
-			} catch {
-				return false;
-			}
-		},
-	});
+  configureContainer({ debug: import.meta.env.DEV });
+  setLifecycleAdapter({
+    onScopeDispose(cleanup) {
+      try {
+        onDestroy(cleanup);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
 </script>
 ```
 
 ```svelte
 <!-- +page.svelte -->
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
-	import { useMarketsQuery } from '$lib/queries/markets.query';
+  import { onDestroy, onMount } from 'svelte';
+  import { useMarketsQuery } from '$lib/queries/markets.query';
 
-	const markets = useMarketsQuery();
-	const marketsData$ = markets.data$.with(['baseCurrency', 'quoteCurrency']);
+  const markets = useMarketsQuery();
+  const marketsData$ = markets.data$.with(['baseCurrency', 'quoteCurrency']);
 
-	onMount(() => markets.execute());
-	onDestroy(() => markets.cancel()); // disposal is handled by the container
+  onMount(() => markets.execute());
+  onDestroy(() => markets.cancel()); // disposal is handled by the container
 </script>
 
 {$marketsData$?.map((row) => row.id).join(', ')}
 ```
 
-In Svelte, a query's `Subscription` satisfies the Svelte store contract, so `$` auto-subscription works on `data$`, `error$`, and `loading$` directly.
+A query's `Subscription` satisfies the Svelte store contract, so `$` auto-subscription works on `data$`, `error$`, `loading$`, and any `.with(...)` result directly.
 
-#### Vue
+### Vue
 
 ```ts
+// main.ts
 import { setLifecycleAdapter } from '@reactive/state';
 import { getCurrentScope, onScopeDispose as vueOnScopeDispose } from 'vue';
 
@@ -436,16 +477,120 @@ setLifecycleAdapter({
 });
 ```
 
-#### React
+Accessors called in `<script setup>` bind to the component's effect scope; ref counts release automatically on unmount.
 
-React has no built-in scope model. Use the lifecycle adapter's `false` return to detect that no scope is active and dispose manually in `useEffect` cleanup / `useLayoutEffect`, or use `onScopeDispose` and handle the fallback yourself.
+### React
+
+React has no scope model, so there is no adapter — release references manually with `sweep()`:
+
+```tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useMarketsQuery } from './queries/markets.query';
+
+function useStream<T>(stream: { subscribe: (next: (value: T) => void) => { unsubscribe(): void } }, initial: T): T {
+  const [value, setValue] = useState(initial);
+  useEffect(() => {
+    const sub = stream.subscribe(setValue);
+    return () => sub.unsubscribe();
+  }, [stream]);
+  return value;
+}
+
+export function MarketsPage() {
+  const markets = useMarketsQuery();
+  const data = useStream(markets.data$.with(['baseCurrency', 'quoteCurrency']), []);
+
+  useEffect(() => {
+    markets.execute();
+    return () => {
+      markets.cancel();
+      markets.sweep(); // release this component's reference
+    };
+  }, []); // mount/unmount only
+  // ...
+}
+```
+
+Notes:
+
+- `.with(...)` results are stable (cached per relation config) and safe as effect dependencies. A stream object built per render through other means (e.g. `.pipe(...)`) must be memoized with `useMemo`, or the resubscribe loop will reset state every render.
+- Call the accessor in the component body and pair it with exactly one `sweep()` on unmount — the underlying instance is shared, so repeat accessor calls just re-reference it.
+- In development, React StrictMode intentionally runs effects twice (mount → cleanup → mount); the ref-counting container handles that cycle by design.
+
+### Angular
+
+Use `inject(DestroyRef)` inside the adapter — it resolves because `defineQuery` accessors and `toSignal` are called from field initializers, which run in an injection context:
+
+```ts
+// main.ts
+import { DestroyRef, inject } from '@angular/core';
+import { configureContainer, setLifecycleAdapter } from '@reactive/state';
+
+configureContainer({ debug: !!(globalThis as { ngDevMode?: unknown }).ngDevMode });
+
+setLifecycleAdapter({
+  onScopeDispose(cleanup) {
+    try {
+      inject(DestroyRef).onDestroy(cleanup);
+      return true;
+    } catch {
+      return false; // not in an injection context
+    }
+  },
+});
+```
+
+```ts
+// markets.page.ts
+import { Component, OnInit } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { useMarketsQuery } from './queries/markets.query';
+
+@Component({
+  selector: 'app-markets',
+  template: `…`,
+})
+export class MarketsPage implements OnInit {
+  protected readonly marketsQuery = useMarketsQuery(); // scope bound via DestroyRef
+
+  protected readonly loading = toSignal(this.marketsQuery.loading$, { initialValue: false });
+  protected readonly data = toSignal(
+    this.marketsQuery.data$.with(['baseCurrency', 'quoteCurrency']),
+    { initialValue: null }
+  );
+
+  ngOnInit(): void {
+    this.marketsQuery.execute();
+  }
+}
+```
+
+`toSignal` unsubscribes on component destroy; the adapter releases the container reference. No manual `sweep()` needed.
+
+## Examples
+
+Runnable reference applications for all four frameworks live in `examples/`:
+
+| App | Stack | Dev command (run inside its dir) |
+|-----|-------|----------------------------------|
+| `examples/svelte/` | SvelteKit | `npm run dev` |
+| `examples/react/` | Next.js (App Router), port 4100 | `npm run dev` |
+| `examples/vue/` | Vite + vue-router | `npm run dev` |
+| `examples/angular/` | Angular (zoneless), port 4100 | `npm start` |
+
+They share the query modules in `examples/queries/` (DTO validation with Valibot, repositories, `defineQuery` factories with market-to-currency relations) and import the package's **source** via relative paths — no build of the package needed. Each app demonstrates the adapter install, relation joins via `data$.with([...])`, refresh, error/loading states, and scope-driven container cleanup.
+
+The examples use npm; the package root uses pnpm. Never regenerate one lockfile with the other package manager.
 
 ## Development
 
 ```bash
 pnpm install
 pnpm lint && pnpm check-types && pnpm test && pnpm build   # full verification
-pnpm dev                                                     # tsup --watch
+pnpm dev                                                    # tsup --watch
+pnpm test src/core/useQuery.test.ts -t "executes tasks in order"   # single file / test
 ```
 
-The Svelte example lives in `examples/svelte/` (separate npm package — run its commands from inside that directory).
+Tests are colocated with the source in `src/core/*.test.ts` (queue strategies, relations, container ref-counting, lifecycle delegation).

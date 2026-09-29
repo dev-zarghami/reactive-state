@@ -12,7 +12,6 @@ export default function MarketsPage() {
     const marketsData = useStream(marketsQuery.data$.with(["baseCurrency", "quoteCurrency"]), []);
 
     useEffect(() => {
-        console.log('useEffect-------');
         marketsQuery.execute();
 
         return () => {
