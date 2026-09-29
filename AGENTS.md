@@ -5,7 +5,8 @@
 `@reactive/state` — private npm package (`version 0.0.1`, `"private": true`, `publishConfig.access: public`): an RxJS reactive query engine (`useQuery`) plus a keyed singleton container (`defineQuery`) and a relation/join system.
 
 - **No framework adapters ship.** `src/adapters/` was deleted in HEAD (`remove modules`). Lifecycle is user-supplied via `setLifecycleAdapter()` — the four example apps are the reference implementations.
-- Git repo **does** exist (`main`, `origin/main`), but there is **no CI** — verification is local only.
+- Git repo **does** exist (`main`, `origin/main`). CI is **release-triggered only** (`.github/workflows/npm-publish.yml`, on `release: created`) — nothing runs on push or PR, so local verification is still the gate.
+- `node_modules/` and `.idea/` were committed until recently and are now untracked (121 tracked files). A root `.gitignore` exists and covers `node_modules/`, `dist/`, and the example build caches.
 - `CLAUDE.md` is **stale** (documents the deleted `src/adapters/svelte|vue|react`, and a `file:/home/.../dist` dependency). `README.md` is current. Trust source over both.
 
 ## Commands
@@ -44,11 +45,10 @@ pnpm install:examples       # npm install in each example (never pnpm there)
 ## Gotchas an agent will hit
 
 - **Container debug logging is ON by default** — `let debugEnabled = true` (`src/core/queryContainer.ts:30`), contradicting both the JSDoc and the README table (which say `false`). This floods `pnpm test` output with `console.table` blocks. Every example calls `configureContainer({ debug: ... })` explicitly at startup; do the same or flip the source default.
-- **CJS entry is broken.** `package.json` `require` → `./dist/index.cjs`, but tsup emits `dist/index.js` (verified). Fix before relying on `require()` or publishing.
-- **`node_modules/` is already committed to git** (11,860 of 11,984 files in `HEAD`; `.idea/` adds 4 more). A `.gitignore` exists at the root but **cannot** untrack them — gitignore only applies to untracked files. A fresh clone therefore checks out the whole pnpm dependency tree (~48 MB `.git`). `git status` is clean now, but `git ls-files` still lists them. Fixing it means `git rm -r --cached node_modules .idea` + commit, which is a large staged change — don't do it as a side effect of unrelated work.
+- **The publish pipeline cannot succeed until the two failures above are fixed.** `.github/workflows/npm-publish.yml` runs `pnpm install --frozen-lockfile` → `lint` → `check-types` → `test` → `build`, and `publish-npm` is `needs: build` — so `check-types` (TS2307) and `test` both gate the release. Root is pnpm in CI; `dist/` is gitignored so the explicit `build` step is mandatory, and a `prepack` hook rebuilds it as a backstop.
+- **Stale manifest entries** (not yet cleaned up, still ship to npm): `svelte` is a non-optional `peerDependency` and `vue` optional, but `src/` imports no framework. `decimal.js` and `valibot` are declared `dependencies` yet unused by `src/` (valibot is only used in `examples/`, and is tsup-`external`). `fake-indexeddb` is an unused devDep. Fixing these changes the published surface.
 - **`pnpm-workspace.yaml` is not a workspace** — it only contains `allowBuilds: { esbuild: true }`. The five example projects are independent npm projects, not members.
-- **Lockfile hazard:** root has both `pnpm-lock.yaml` (authoritative) and a stray npm `package-lock.json`. Examples are npm-only. Never regenerate one lockfile with the other package manager.
-- **Stale manifest entries:** `svelte` is a non-optional `peerDependency` and `vue` optional, but `src/` imports no framework. `decimal.js` and `valibot` are declared `dependencies` yet unused by `src/` (valibot is only used in `examples/`, and is tsup-`external`). `fake-indexeddb` is an unused devDep. Fixing these changes the published surface.
+- **Lockfiles are split by project.** Root is pnpm-only (`pnpm-lock.yaml`, `pnpm install --frozen-lockfile`, `packageManager: pnpm@11.25.0`, Node `>=22.13` — pnpm 11 will not run on Node 20). The stray root `package-lock.json` was **deleted**; do not regenerate it. `examples/*/` are npm-only and each still has its own `package-lock.json` — use `pnpm install:examples`, never pnpm there.
 - `"sideEffects": false` conflicts with `queryContainer.ts`, which runs a module-level RxJS disposal-timer pipeline at import time.
 - `src/example.ts` is a commented design sketch, not executable code.
 - tsconfig is `strict`, ES2022, `moduleResolution: bundler`. ESLint errors on unused vars except `^_`-prefixed args.
