@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+# `dist/` covers both the root tsup bundle and examples/angular/dist.
+/dist/
+coverage/
+
+# Build caches from the example apps
+.svelte-kit/
+.next/
+*.tsbuildinfo
+
+# IDE / OS
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
