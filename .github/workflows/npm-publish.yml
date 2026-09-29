@@ -1,17 +1,29 @@
-# Publishes the package to the public npm registry when a release is created.
-# For more information see: https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+# Publishes to the public npm registry when a version tag is pushed.
 #
-# The repo is pnpm-managed: `pnpm-lock.yaml` is authoritative and installs run
-# with `--frozen-lockfile`. Node is pinned to >= 22.13 because pnpm 11 requires it.
+#   git tag v0.0.1 && git push origin v0.0.1
+#
+# The tag is the source of truth: its `v`-stripped value is written into
+# package.json before publishing, so the published version can never drift from
+# the tag. A non-semver tag is rejected rather than published under a wrong
+# version — npm refusing to republish an existing version is the final backstop.
+#
+# The repo is pnpm-managed: `pnpm-lock.yaml` is authoritative. Node is pinned to
+# >= 22.13 because pnpm 11 requires it.
 
-name: Node.js Package
+name: Publish
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Two tags pushed in quick succession must not race each other onto the registry.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,16 +38,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm check-types
       - run: pnpm test
-      # `dist/` is gitignored, so CI must build it — the published tarball only
-      # contains files listed in package.json `files`.
-      - run: pnpm build
 
   publish-npm:
-    needs: build
+    needs: verify
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -47,7 +53,31 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org/
       - run: pnpm install --frozen-lockfile
+
+      - name: Resolve version from tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const tag = process.env.TAG;
+            const version = tag.startsWith("v") ? tag.slice(1) : tag;
+            if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
+              console.error("Refusing to publish: tag " + tag + " is not a semver tag (expected v1.2.3)");
+              process.exit(1);
+            }
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            if (pkg.version !== version) {
+              console.log("package.json " + pkg.version + " -> " + version + " (from tag)");
+            }
+            pkg.version = version;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      # `dist/` is gitignored, so it must be built. The `prepack` hook also
+      # rebuilds it, but an explicit step makes a failure obvious in the log.
       - run: pnpm build
+
       - run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
