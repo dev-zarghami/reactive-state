@@ -4,7 +4,6 @@ import {
   getLifecycleAdapter,
   onScopeDispose
 } from './lifecycle';
-import { reactAdapter } from '../adapters/react';
 
 describe('lifecycle', () => {
   beforeEach(() => {
@@ -42,12 +41,6 @@ describe('lifecycle', () => {
     it('returns false when no adapter installed', () => {
       const result = onScopeDispose(() => {});
       expect(result).toBe(false);
-    });
-  });
-
-  describe('reactAdapter', () => {
-    it('always returns false (stub)', () => {
-      expect(reactAdapter.onScopeDispose(() => {})).toBe(false);
     });
   });
 });

@@ -35,17 +35,19 @@ pnpm install:examples       # npm install in each example (never pnpm there)
 - `pnpm check-types` = `tsc --noEmit`; `tsconfig.json` `include` is only `src/**/*` — examples are **not** typechecked from the root. Verify them from their own directories.
 - Tests: `vitest run`, `include: ['src/**/*.test.ts']`, colocated in `src/core/`. Coverage: `useQuery.test.ts` (strategies, execute callbacks, cancel/reset/dispose, setters, `.with()` stream stability), `queryContainer.test.ts` (singleton, refcounting, disposal-timer race), `lifecycle.test.ts` (delegation). **No tests** for delayed disposal timing, LRU trimming, or actual relation join output.
 
-## Pre-existing failures (verified — not caused by you)
+## Verification state
 
-1. `pnpm check-types` → `src/core/lifecycle.test.ts(7,30): error TS2307: Cannot find module '../adapters/react'`. That import no longer exists, so the whole file fails to load and `pnpm test` reports `Failed Suites 1`.
-2. `pnpm test` → `queryContainer.test.ts` › "returns the same instance for the same key" fails. `defineQuery`'s accessor returns a **fresh spread** `{...entry.instance, sweep}` on every call (`src/core/queryContainer.ts:295`), so `toBe` identity can never hold even though the registry entry is shared. 36 tests pass, 1 fails.
+`pnpm lint`, `pnpm check-types`, `pnpm test` (41 tests), and `pnpm build` all pass. `pnpm check:examples` passes for all four apps — but see the `node_modules` note below; a fresh clone must run `pnpm install:examples` first.
 
-`pnpm build` succeeds.
+Two failures that used to gate the release were fixed, so don't "restore" either:
+- `lifecycle.test.ts` had a stale `import { reactAdapter } from '../adapters/react'` plus a dead `reactAdapter` test block, left over when `src/adapters/` was deleted. Both were removed.
+- `defineQuery`'s accessor used to spread `{...entry.instance, sweep}` on *every* call, so the documented "same key returns the same instance" contract was false and `toBe` identity failed. It now builds that facade once per registry entry and reuses it (`queryContainer.ts` `RegistryEntry.facade`).
 
 ## Gotchas an agent will hit
 
 - **Container debug logging is ON by default** — `let debugEnabled = true` (`src/core/queryContainer.ts:30`), contradicting both the JSDoc and the README table (which say `false`). This floods `pnpm test` output with `console.table` blocks. Every example calls `configureContainer({ debug: ... })` explicitly at startup; do the same or flip the source default.
-- **The publish pipeline cannot succeed until the two failures above are fixed.** `.github/workflows/npm-publish.yml` runs `pnpm install --frozen-lockfile` → `lint` → `check-types` → `test` → `build`, and `publish-npm` is `needs: verify` — so `check-types` (TS2307) and `test` both gate the release. Root is pnpm in CI; `dist/` is gitignored so the explicit `build` step is mandatory, and a `prepack` hook rebuilds it as a backstop.
+- **`node_modules` is not committed anywhere, including `examples/*`.** A fresh clone has no deps in any project — `pnpm install` for the root, `pnpm install:examples` for the five example projects. A missing `svelte-kit: not found` / `next: not found` almost always means this, not a broken script.
+- **`examples/react`'s `typecheck` runs `next typegen` first on purpose.** `LayoutProps<...>` in `app/layout.tsx` comes from Next's generated `.next/types`, which is gitignored. Plain `tsc --noEmit` fails with TS2304 on a clean tree.
 - **Stale manifest entries** (not yet cleaned up, still ship to npm): `svelte` is a non-optional `peerDependency` and `vue` optional, but `src/` imports no framework. `decimal.js` and `valibot` are declared `dependencies` yet unused by `src/` (valibot is only used in `examples/`, and is tsup-`external`). `fake-indexeddb` is an unused devDep. Fixing these changes the published surface.
 - **`pnpm-workspace.yaml` is not a workspace** — it only contains `allowBuilds: { esbuild: true }`. The five example projects are independent npm projects, not members.
 - **Lockfiles are split by project.** Root is pnpm-only (`pnpm-lock.yaml`, `pnpm install --frozen-lockfile`, `packageManager: pnpm@11.25.0`, Node `>=22.13` — pnpm 11 will not run on Node 20). The stray root `package-lock.json` was **deleted**; do not regenerate it. `examples/*/` are npm-only and each still has its own `package-lock.json` — use `pnpm install:examples`, never pnpm there.

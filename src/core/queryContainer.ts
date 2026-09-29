@@ -9,6 +9,8 @@ type QueryFactory<TData, TError, TResult extends object> = (
 
 type RegistryEntry<T extends object> = {
     instance: T & { dispose?: () => void };
+    /** Cached `{...instance, sweep}` handed to accessor callers — built once. */
+    facade?: object;
     refCount: number;
     createdAt: number;
     lastUsed: number;
@@ -279,20 +281,29 @@ export function defineQuery<TData = unknown, TError = unknown>(key: string) {
             const entry = getOrCreateEntry<TData, TError, TResult>(key, factory);
             useEntry(key, entry);
 
-            function sweep() {
-                entry.refCount--;
-                groupLog('REF--', key, entry);
+            // The facade is built once per registry entry and then reused.
+            // Spreading `entry.instance` on every accessor call would hand back
+            // a brand-new object each time, breaking the documented "same key
+            // returns the same instance" contract and defeating referential
+            // equality checks in framework dependency arrays.
+            if (!entry.facade) {
+                const sweep = () => {
+                    entry.refCount--;
+                    groupLog('REF--', key, entry);
 
-                if (entry.refCount <= 0) {
-                    const delay = getDisposalDelay(entry);
-                    disposalRequests.next({key, entry, delay});
-                    groupLog('WILL-DISPOSE', key, entry);
-                }
+                    if (entry.refCount <= 0) {
+                        const delay = getDisposalDelay(entry);
+                        disposalRequests.next({key, entry, delay});
+                        groupLog('WILL-DISPOSE', key, entry);
+                    }
+                };
+
+                entry.facade = {...entry.instance, sweep};
             }
 
-            onScopeDispose(() => sweep());
+            onScopeDispose(() => (entry.facade as { sweep: () => void }).sweep());
 
-            return {...entry.instance, sweep} as DefinedQueryResult<TResult>;
+            return entry.facade as DefinedQueryResult<TResult>;
         };
     };
 }
