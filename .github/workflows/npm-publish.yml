@@ -78,6 +78,23 @@ jobs:
       # rebuilds it, but an explicit step makes a failure obvious in the log.
       - run: pnpm build
 
-      - run: pnpm publish --access public --no-git-checks
+      # npm answers an unauthenticated PUT with 404, not 401, so a missing or
+      # unusable token is indistinguishable from "name is taken". Fail loudly
+      # and specifically before that. Never echoes the token value.
+      - name: Preflight auth check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::No NPM_TOKEN secret in this repo (or it is empty). Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "NPM_TOKEN present (${#NODE_AUTH_TOKEN} chars)"
+          echo "--- npm whoami ---"
+          npm whoami
+          echo "--- scope ownership (@reactive) ---"
+          npm access list packages @reactive || echo "::warning::could not read the @reactive scope with this token"
+
+      - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
